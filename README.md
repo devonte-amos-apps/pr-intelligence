@@ -16,7 +16,7 @@ permissions:
   pull-requests: write
 jobs:
   review:
-    uses: devcamos/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
+    uses: devonte-amos-apps/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
     with:
       rules-path: architecture-rules.json   # repo-specific principles and rules
       node-version: "22"

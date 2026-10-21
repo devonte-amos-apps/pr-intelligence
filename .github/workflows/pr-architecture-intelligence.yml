@@ -1,7 +1,7 @@
 name: PR Architecture Intelligence
 
 # Shared, reusable PR review. Call it from any repository:
-#   uses: devcamos/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
+#   uses: devonte-amos-apps/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
 # Repository-specific principles and rules live in the caller's rules file.
 
 on:
@@ -141,7 +141,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
-        uses: devcamos/pr-intelligence@v1
+        uses: devonte-amos-apps/pr-intelligence@v1
         with:
           rules-path: ${{ inputs.rules-path }}
 
