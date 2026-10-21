@@ -151,7 +151,7 @@ async function readOptional(file) {
   }
 }
 
-export async function runGate({ cwd = process.cwd(), env = process.env } = {}) {
+export async function runGate({ cwd = process.cwd(), env = process.env, stdout = process.stdout, stderr = process.stderr } = {}) {
   const dir = path.resolve(cwd, ".pr-architecture");
   const json = (text) => {
     try { return JSON.parse(text); } catch { return null; }
@@ -171,8 +171,8 @@ export async function runGate({ cwd = process.cwd(), env = process.env } = {}) {
   const summary = renderGateSummary(result);
   await fs.writeFile(path.resolve(cwd, "pr-gate.md"), summary);
   if (env.GITHUB_STEP_SUMMARY) await fs.appendFile(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
-  process.stdout.write(`${summary}\n`);
-  for (const f of result.failures) process.stderr.write(`::error title=PR intelligence gate (${f.check})::${f.reason} ${f.fix}\n`.replace(/\n(?!$)/g, " "));
+  stdout.write(`${summary}\n`);
+  for (const f of result.failures) stderr.write(`::error title=PR intelligence gate (${f.check})::${f.reason} ${f.fix}\n`.replace(/\n(?!$)/g, " "));
   if (!result.passed) process.exitCode = 1;
   return result;
 }

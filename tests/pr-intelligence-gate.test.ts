@@ -119,6 +119,9 @@ describe("renderGateSummary", () => {
   })
 })
 
+// Keep gate output (including ::error annotations) out of the CI log during tests.
+const silent = { write: () => true }
+
 describe("runGate", () => {
   let dir: string
   afterEach(async () => {
@@ -133,7 +136,7 @@ describe("runGate", () => {
     await fs.writeFile(path.join(dir, ".pr-architecture", "npm-audit.txt"), audit(1))
     await fs.writeFile(path.join(dir, ".pr-architecture", "dependency-cruiser.txt"), "(3 modules, 1 dependencies cruised)")
     const summaryFile = path.join(dir, "summary.md")
-    const r = await runGate({ cwd: dir, env: { DEPCRUISE_DIRS: "src", FAIL_ON_MAJORS: "true", GITHUB_STEP_SUMMARY: summaryFile } })
+    const r = await runGate({ cwd: dir, stdout: silent, stderr: silent, env: { DEPCRUISE_DIRS: "src", FAIL_ON_MAJORS: "true", GITHUB_STEP_SUMMARY: summaryFile } })
     expect(r.failures.map((f) => f.check)).toEqual(["npm audit", "Major upgrades"])
     expect(process.exitCode).toBe(1)
     expect(await fs.readFile(summaryFile, "utf8")).toMatch(/PR intelligence gate/)
@@ -143,7 +146,7 @@ describe("runGate", () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "gate-"))
     await fs.mkdir(path.join(dir, ".pr-architecture"))
     await fs.writeFile(path.join(dir, ".pr-architecture", "npm-audit.txt"), audit())
-    const r = await runGate({ cwd: dir, env: {} })
+    const r = await runGate({ cwd: dir, stdout: silent, stderr: silent, env: {} })
     expect(r.passed).toBe(true)
   })
 })
