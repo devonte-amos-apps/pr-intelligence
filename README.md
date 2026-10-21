@@ -28,3 +28,17 @@ jobs:
 Inputs: `rules-path`, `node-version`, `dependency-cruiser-dirs`, `extra-env` (non-secret build placeholders), `gemini-model`. Secret: `GEMINI_API_KEY` (optional; without it the comment still shows diagnostics and upgrade suggestions).
 
 The rules file is JSON: `{ "project": "...", "reviewPrinciples": [...], "rules": [{ "id", "severity", "title", "description", "evidence" }] }`.
+
+## PR intelligence gate
+
+The workflow runs a second job, **PR intelligence gate**, that passes or fails the PR deterministically from the collected diagnostics, so it still works when Gemini is down or rate-limited.
+
+| Rule | Default |
+| --- | --- |
+| npm audit has any high or critical vulnerability | fail |
+| Review risk rated HIGH or CRITICAL (`fail-on-high`) | fail (skipped if the AI rating is unavailable) |
+| dependency-cruiser requested but checked 0 modules | fail |
+| PR introduces a major version bump (`fail-on-majors`) | warning (fail when `true`) |
+| Major upgrades available (npm outdated) | warning |
+
+The gate writes a job summary and a sticky PR comment explaining each failure and how to fix it. `tool-ref` (default `v1`) selects which pr-intelligence ref runs the scripts; keep it in step with the ref in `uses:`.

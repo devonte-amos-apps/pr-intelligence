@@ -27,6 +27,18 @@ on:
         description: Optional Gemini model override.
         type: string
         default: ""
+      fail-on-high:
+        description: Fail the gate when the AI review rates the PR HIGH (or CRITICAL) risk.
+        type: boolean
+        default: true
+      fail-on-majors:
+        description: Fail the gate when the PR itself introduces a major version bump. Otherwise majors are warnings.
+        type: boolean
+        default: false
+      tool-ref:
+        description: Ref of devonte-amos-apps/pr-intelligence whose scripts run the review and gate. Keep it in step with the ref in `uses:`.
+        type: string
+        default: v1
     secrets:
       GEMINI_API_KEY:
         required: false
@@ -77,6 +89,7 @@ jobs:
 
           git diff --name-status "$BASE_SHA" "$HEAD_SHA" > .pr-architecture/changed-files.txt
           git diff --no-color --no-ext-diff --unified=3 "$BASE_SHA" "$HEAD_SHA" > .pr-architecture/diff.patch
+          git show "$BASE_SHA:package.json" > .pr-architecture/base-package.json 2>/dev/null || rm -f .pr-architecture/base-package.json
 
       - name: Run repository diagnostics
         shell: bash
@@ -128,6 +141,14 @@ jobs:
 
           exit 0
 
+      - name: Check out PR intelligence tool
+        uses: actions/checkout@v7
+        with:
+          repository: devonte-amos-apps/pr-intelligence
+          ref: ${{ inputs.tool-ref }}
+          path: .pr-intelligence-tool
+          persist-credentials: false
+
       - name: Generate architecture review
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -141,7 +162,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_SHA: ${{ github.sha }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
-        uses: devonte-amos-apps/pr-intelligence@v1
+        uses: ./.pr-intelligence-tool
         with:
           rules-path: ${{ inputs.rules-path }}
 
@@ -150,7 +171,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: pr-architecture-review-${{ github.event.pull_request.number || github.run_id }}
+          include-hidden-files: true
           path: |
+            package.json
             pr-review.md
             .pr-architecture/
           if-no-files-found: warn
@@ -193,3 +216,55 @@ jobs:
             } else {
               await github.rest.issues.createComment({ owner, repo, issue_number, body });
             }
+
+  gate:
+    name: PR intelligence gate
+    needs: review
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out PR intelligence tool
+        uses: actions/checkout@v7
+        with:
+          repository: devonte-amos-apps/pr-intelligence
+          ref: ${{ inputs.tool-ref }}
+          path: tool
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Download review diagnostics
+        uses: actions/download-artifact@v8
+        with:
+          name: pr-architecture-review-${{ github.event.pull_request.number || github.run_id }}
+          path: work
+
+      - name: Evaluate gate
+        working-directory: work
+        env:
+          FAIL_ON_HIGH: ${{ inputs.fail-on-high }}
+          FAIL_ON_MAJORS: ${{ inputs.fail-on-majors }}
+          DEPCRUISE_DIRS: ${{ inputs.dependency-cruiser-dirs }}
+        run: node ../tool/scripts/pr-intelligence/gate.mjs
+
+      - name: Post sticky gate comment
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- pr-intelligence-gate -->";
+            const file = "work/pr-gate.md";
+            const text = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "## PR intelligence gate\n\nThe gate did not produce a summary. Inspect the job logs.";
+            const body = `${marker}\n${text}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number, per_page: 100 });
+            const existing = comments.find((c) => c.user?.type === "Bot" && c.body?.includes(marker));
+            if (existing) await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            else await github.rest.issues.createComment({ owner, repo, issue_number, body });
