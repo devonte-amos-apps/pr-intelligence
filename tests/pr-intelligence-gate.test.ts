@@ -42,6 +42,15 @@ describe("parsers", () => {
     expect(parseCruiserModules("x (0 modules, 0 dependencies cruised)")?.modules).toBe(0)
     expect(parseCruiserModules("skipped")).toBeNull()
   })
+  it("reads cruiser counts from violation output", () => {
+    const out = "  info no-orphans: lib/seo.ts\n\nx 22 dependency violations (2 errors, 0 warnings). 329 modules, 720 dependencies cruised.\n"
+    expect(parseCruiserModules(out)).toEqual({ modules: 329, dependencies: 720 })
+    expect(parseCruiserModules("\u001b[31mx 1 dependency violations (1 errors, 0 warnings). 1 modules, 1 dependencies cruised.\u001b[39m")).toEqual({ modules: 1, dependencies: 1 })
+  })
+  it("reads cruiser counts from captured apisandbox output", async () => {
+    const text = await fs.readFile(path.join(__dirname, "fixtures-apisandbox-depcruise-violations.txt"), "utf8")
+    expect(parseCruiserModules(text)).toEqual({ modules: 330, dependencies: 722 })
+  })
   it("finds majors the PR introduces", () => {
     expect(introducedMajors(
       { dependencies: { zod: "^3.25.0", next: "16.4.1", x: "latest" }, devDependencies: { typescript: "~6.0.0" } },

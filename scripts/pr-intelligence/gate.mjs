@@ -40,7 +40,10 @@ export function parseRisk(text) {
 }
 
 export function parseCruiserModules(text) {
-  const match = /\((\d+)\s+modules?,\s*(\d+)\s+dependenc/i.exec(text || "");
+  // Matches both "✔ no dependency violations found (N modules, M dependencies cruised)"
+  // and "x K dependency violations (...). N modules, M dependencies cruised."
+  const clean = (text || "").replace(/\u001b\[[0-9;]*m/g, "");
+  const match = /(\d+)\s+modules?,\s*(\d+)\s+dependenc(?:y|ies)\s+cruised/i.exec(clean);
   return match ? { modules: Number(match[1]), dependencies: Number(match[2]) } : null;
 }
 
