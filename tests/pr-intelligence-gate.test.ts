@@ -78,6 +78,7 @@ describe("evaluateGate", () => {
     expect(evaluateGate({ ...base, cruiserRequested: true, cruiserText: "(0 modules, 0 dependencies cruised)" }).failures[0].check).toBe("dependency-cruiser")
     expect(evaluateGate({ ...base, cruiserRequested: true, cruiserText: "(44 modules, 9 dependencies cruised)" }).passed).toBe(true)
     expect(evaluateGate({ ...base, cruiserRequested: true, cruiserText: "boom", cruiserExit: "2" }).warnings.join()).toMatch(/exit 2/)
+    expect(evaluateGate({ ...base, cruiserRequested: true, cruiserText: "dependency-cruiser is not installed; skipped." }).warnings.join()).toMatch(/not installed/)
     expect(evaluateGate({ ...base, cruiserRequested: false, cruiserText: "(0 modules, 0 dependencies cruised)" }).passed).toBe(true)
   })
   it("warns on majors by default and fails when fail-on-majors is true", () => {

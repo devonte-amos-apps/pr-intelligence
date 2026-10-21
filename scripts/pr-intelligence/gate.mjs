@@ -85,7 +85,8 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
   }
 
   if (cruiserRequested) {
-    if (cruiser === null) warnings.push(`dependency-cruiser module count unavailable (exit ${cruiserExit ?? "unknown"}).`);
+    if (cruiser === null && /\bskipped\b/i.test(cruiserText || "")) warnings.push("dependency-cruiser was requested but skipped (not installed in this repo).");
+    else if (cruiser === null) warnings.push(`dependency-cruiser module count unavailable (exit ${cruiserExit ?? "unknown"}).`);
     else if (cruiser.modules === 0) {
       failures.push({
         check: "dependency-cruiser",
