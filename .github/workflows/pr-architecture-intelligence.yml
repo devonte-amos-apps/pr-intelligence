@@ -1,0 +1,195 @@
+name: PR Architecture Intelligence
+
+# Shared, reusable PR review. Call it from any repository:
+#   uses: devcamos/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
+# Repository-specific principles and rules live in the caller's rules file.
+
+on:
+  workflow_call:
+    inputs:
+      rules-path:
+        description: Path to the caller's architecture rules JSON file.
+        type: string
+        default: architecture-rules.json
+      node-version:
+        description: Node.js version used to install and test the caller.
+        type: string
+        default: "22"
+      dependency-cruiser-dirs:
+        description: Space-separated directories for dependency-cruiser. Empty skips it.
+        type: string
+        default: ""
+      extra-env:
+        description: Optional newline-separated KEY=VALUE pairs (non-secret build placeholders).
+        type: string
+        default: ""
+      gemini-model:
+        description: Optional Gemini model override.
+        type: string
+        default: ""
+    secrets:
+      GEMINI_API_KEY:
+        required: false
+
+env:
+  NODE_OPTIONS: --max-old-space-size=4096
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  review:
+    name: Review architecture changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - name: Export extra environment
+        if: inputs.extra-env != ''
+        env:
+          EXTRA_ENV: ${{ inputs.extra-env }}
+        run: printf '%s\n' "$EXTRA_ENV" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' >> "$GITHUB_ENV" || true
+
+      - name: Install dependencies
+        run: npm ci --no-audit --fund=false
+
+      - name: Collect changed files and diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          mkdir -p .pr-architecture
+
+          if [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^0+$ ]]; then
+            BASE_SHA="$(git hash-object -t tree /dev/null)"
+          elif ! git cat-file -e "$BASE_SHA^{object}" 2>/dev/null; then
+            BASE_SHA="$(git rev-parse "$HEAD_SHA^" 2>/dev/null || git hash-object -t tree /dev/null)"
+          fi
+
+          git diff --name-status "$BASE_SHA" "$HEAD_SHA" > .pr-architecture/changed-files.txt
+          git diff --no-color --no-ext-diff --unified=3 "$BASE_SHA" "$HEAD_SHA" > .pr-architecture/diff.patch
+
+      - name: Run repository diagnostics
+        shell: bash
+        env:
+          DEPCRUISE_DIRS: ${{ inputs.dependency-cruiser-dirs }}
+        run: |
+          set +e
+
+          run_check() {
+            local name="$1"
+            shift
+            "$@" > ".pr-architecture/${name}.txt" 2>&1
+            printf '%s\n' "$?" > ".pr-architecture/${name}.exit"
+          }
+
+          run_check npm-audit npm audit --json
+          run_check npm-ls npm ls --depth=0 --json
+          # npm outdated exits 1 when anything is outdated; that is expected.
+          npm outdated --json --depth=0 > .pr-architecture/npm-outdated.txt 2> .pr-architecture/npm-outdated.err || true
+
+          if npm pkg get scripts.test:unit | grep -qv '^{}$'; then
+            run_check tests npm run test:unit -- --reporter=dot
+          elif npm pkg get scripts.test | grep -qv '^{}$'; then
+            run_check tests npm test
+          else
+            printf 'No test script is defined; skipped.\n' > .pr-architecture/tests.txt
+            printf '0\n' > .pr-architecture/tests.exit
+          fi
+
+          if npm pkg get scripts.build | grep -qv '^{}$'; then
+            run_check build npm run build
+          else
+            printf 'No build script is defined; skipped.\n' > .pr-architecture/build.txt
+            printf '0\n' > .pr-architecture/build.exit
+          fi
+
+          read -r -a CRUISE_DIRS <<< "$DEPCRUISE_DIRS"
+          EXISTING_DIRS=()
+          for dir in "${CRUISE_DIRS[@]}"; do [[ -e "$dir" ]] && EXISTING_DIRS+=("$dir"); done
+          if [[ -z "$DEPCRUISE_DIRS" ]]; then
+            printf 'dependency-cruiser was not requested; skipped.\n' > .pr-architecture/dependency-cruiser.txt
+            printf '0\n' > .pr-architecture/dependency-cruiser.exit
+          elif [[ -x node_modules/.bin/depcruise && ${#EXISTING_DIRS[@]} -gt 0 ]]; then
+            run_check dependency-cruiser node_modules/.bin/depcruise "${EXISTING_DIRS[@]}" --output-type err
+          else
+            printf 'dependency-cruiser is not installed; skipped.\n' > .pr-architecture/dependency-cruiser.txt
+            printf '0\n' > .pr-architecture/dependency-cruiser.exit
+          fi
+
+          exit 0
+
+      - name: Generate architecture review
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ inputs.gemini-model || vars.GEMINI_REVIEW_MODEL || 'gemini-2.5-flash' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_SHA: ${{ github.sha }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+        uses: devcamos/pr-intelligence@v1
+        with:
+          rules-path: ${{ inputs.rules-path }}
+
+      - name: Upload review artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pr-architecture-review-${{ github.event.pull_request.number || github.run_id }}
+          path: |
+            pr-review.md
+            .pr-architecture/
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Post sticky pull request comment
+        if: always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false
+        uses: actions/github-script@v9
+        env:
+          REVIEW_FILE: pr-review.md
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require("fs");
+            const marker = "<!-- pr-architecture-intelligence -->";
+            const fallback = "## PR Architecture Intelligence\n\nThe review file was not generated. Inspect the workflow logs for details.";
+            const review = fs.existsSync(process.env.REVIEW_FILE)
+              ? fs.readFileSync(process.env.REVIEW_FILE, "utf8")
+              : fallback;
+            const body = `${marker}\n${review}`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner,
+              repo,
+              issue_number,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (comment) => comment.user?.type === "Bot" && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }

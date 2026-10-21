@@ -1,0 +1,19 @@
+{
+  "name": "pr-intelligence",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reusable PR Architecture Intelligence review: diagnostics, AI review and dependency upgrade suggestions.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@google/genai": "^2.30.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^5.0.5",
+    "vitest": "^5.0.5"
+  }
+}

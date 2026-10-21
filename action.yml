@@ -1,0 +1,18 @@
+name: PR Architecture Intelligence review
+description: Generates the AI architecture review and dependency upgrade suggestions from collected diagnostics.
+inputs:
+  rules-path:
+    description: Path to the caller's rules JSON file.
+    default: architecture-rules.json
+runs:
+  using: composite
+  steps:
+    - name: Install review runtime
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: npm ci --omit=dev --no-audit --fund=false
+    - name: Generate review
+      shell: bash
+      env:
+        RULES_PATH: ${{ inputs.rules-path }}
+      run: node "${{ github.action_path }}/scripts/ai-pr-review.mjs"
