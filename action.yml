@@ -10,7 +10,7 @@ runs:
     - name: Install review runtime
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: npm ci --omit=dev --no-audit --fund=false
+      run: npm ci --omit=dev --ignore-scripts --no-audit --fund=false
     - name: Generate review
       shell: bash
       env:

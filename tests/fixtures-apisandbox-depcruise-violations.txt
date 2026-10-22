@@ -1,0 +1,24 @@
+
+  info no-orphans: lib/seo.ts
+  info no-orphans: lib/auth/session-token.ts
+  info no-orphans: config/environmentManager.ts
+  info no-orphans: components/CostCalculator.tsx
+  info no-orphans: components/AwsServiceSelector.tsx
+  info no-orphans: components/AwsMigrationDashboard.tsx
+  info no-orphans: app/system-design/tracker/page.tsx
+  info no-orphans: app/phase-4/api-algorithms/page.tsx
+  info no-orphans: app/phase-3/orms/page.tsx
+  info no-orphans: app/phase-2/databases/page.tsx
+  info no-orphans: app/not-found.tsx
+  info no-orphans: app/error.tsx
+  info no-orphans: app/cloud/page.tsx
+  info no-orphans: app/cloud/aws/strategies/page.tsx
+  info no-orphans: app/cloud/aws/migration/page.tsx
+  info no-orphans: app/api/aws/services/route.ts
+  info no-orphans: app/api/aws/migration/strategies/route.ts
+  info no-orphans: app/api/aws/migration/analyze/route.ts
+  info no-orphans: app/api/aws/cost-estimate/route.ts
+  info no-orphans: app/api/aws/architecture/templates/route.ts
+
+x 20 dependency violations (0 errors, 0 warnings). 330 modules, 722 dependencies cruised.
+

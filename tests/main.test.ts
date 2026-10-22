@@ -53,6 +53,7 @@ describe("main", () => {
     await main({ cwd: dir, createClient: async () => ({ models: { generateContent } }), fetchImpl: null as never })
     const out = await read()
     expect(out).toContain("**MEDIUM**")
+    expect(JSON.parse(await fs.readFile(path.join(dir, ".pr-architecture", "review-result.json"), "utf8"))).toEqual({ risk: "medium" })
     expect(out).toContain("| `react` | prod | 18.3.1 | 19.2.0 | 🔴 major (key framework)")
     expect(out).toContain("| Tests | failed (exit 1) |")
     expect(out).toContain("| Build | skipped |")

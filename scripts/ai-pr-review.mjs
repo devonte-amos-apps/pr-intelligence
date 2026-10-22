@@ -502,6 +502,7 @@ Return only the requested structured data. Keep the summary under 40 words and e
     if (!responseText) throw new Error("Gemini returned an empty review");
     const review = parseStructuredReview(responseText);
     await fs.writeFile(outputPath, renderStructuredReview(review, metadata, diagnostics, upgradeTable));
+    await fs.writeFile(path.join(inputDirectory, "review-result.json"), JSON.stringify({ risk: review.risk }));
   } catch (error) {
     const { reason, recovery } = describeGeminiError(error);
     await reportFailure(reason, recovery, metadata, diagnostics, upgradeTable);
