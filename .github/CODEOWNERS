@@ -1,4 +1,4 @@
-# Changes to these paths always need review by Devonte (@devcamos).
+# Changes to these paths always need review by the maintainer (@devcamos).
 /.github/ @devcamos
 /action.yml @devcamos
 /scripts/ @devcamos
