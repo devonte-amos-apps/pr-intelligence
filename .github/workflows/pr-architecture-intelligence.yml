@@ -43,6 +43,10 @@ on:
       GEMINI_API_KEY:
         required: false
 
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   NODE_OPTIONS: --max-old-space-size=4096
   NEXT_TELEMETRY_DISABLED: "1"
