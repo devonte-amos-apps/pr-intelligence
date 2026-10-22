@@ -42,3 +42,23 @@ The workflow runs a second job, **PR intelligence gate**, that passes or fails t
 | Major upgrades available (npm outdated) | warning |
 
 The gate writes a job summary and a sticky PR comment explaining each failure and how to fix it. `tool-ref` (default `v1`) selects which pr-intelligence ref runs the scripts; keep it in step with the ref in `uses:`.
+
+## Develop and test
+
+Node 20+.
+
+```bash
+npm ci
+npm test               # Vitest
+npm run test:coverage  # Vitest with coverage
+```
+
+Releases are tagged (`v1.x.y`) and callers pin the moving major tag (`@v1`).
+
+## Security
+
+Please report vulnerabilities privately. See [SECURITY.md](SECURITY.md).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
