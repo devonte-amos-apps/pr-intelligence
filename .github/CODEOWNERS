@@ -1,0 +1,5 @@
+# Changes to these paths always need review by Devonte (@devcamos).
+/.github/ @devcamos
+/action.yml @devcamos
+/scripts/ @devcamos
+/AGENT_RULES.md @devcamos
