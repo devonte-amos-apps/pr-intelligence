@@ -6,9 +6,19 @@ import { pathToFileURL } from "node:url";
 
 import { renderGateComment } from "./comment-layout.mjs";
 import { directDependencies, parseOutdated, buildUpgradeSuggestions } from "./dependency-upgrades.mjs";
-import { riskFailureCopy } from "./gate-policy.mjs";
+import {
+  failedAreas,
+  elevatedFindings,
+  describeFinding,
+  hasAllowMajorUpgradeLabel,
+  parseLabels,
+  renderApprovalComment,
+  riskFailureCopy,
+  severityStatus,
+  suggestRelease,
+} from "./gate-policy.mjs";
 
-export { GATE_POLICY } from "./gate-policy.mjs";
+export { GATE_POLICY, ALLOW_MAJOR_UPGRADE_LABEL, renderApprovalComment, suggestRelease, severityStatus } from "./gate-policy.mjs";
 
 export function auditCounts(text) {
   const empty = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
@@ -88,7 +98,7 @@ export function introducedMajors(basePackage, headPackage) {
     .map(([name, d]) => ({ name, from: base.get(name).range, to: d.range }));
 }
 
-export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = false, review: reviewInput } = {}) {
+export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = true, failOnHighFindings = true, failOnAreaFail = true, labels = [], title = "", body = "", changedFiles = "", headRef = "", review: reviewInput } = {}) {
   const failures = [];
   const warnings = [];
   const audit = auditCounts(auditText);
@@ -96,6 +106,15 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
   const cruiser = parseCruiserModules(cruiserText);
   const cruiserDetails = parseCruiserReport(cruiserText);
   const review = reviewInput || parseReview(riskText);
+  const allowMajorUpgrade = hasAllowMajorUpgradeLabel(labels);
+  const metadata = review?.metadata || {};
+  const releaseSuggestion = suggestRelease({
+    title: title || metadata.title || "",
+    body: body || metadata.body || "",
+    labels,
+    changedFiles,
+    headRef: headRef || metadata.headRef || "",
+  });
 
   if (!audit.parsed) warnings.push("npm audit output could not be read, so vulnerabilities were not checked.");
   else if (audit.high + audit.critical > 0) {
@@ -122,15 +141,53 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
         reason: "dependency-cruiser checked 0 modules, so the import check proves nothing.",
         fix: "Check `dependency-cruiser-dirs` and the cruiser's TypeScript setup (for example, give it its own TypeScript 6 if the project uses TypeScript 7).",
       });
+    } else if (cruiserDetails.errors > 0) {
+      failures.push({
+        check: "dependency-cruiser",
+        reason: `dependency-cruiser reported ${cruiserDetails.errors} error(s) (forbidden edges, cycles, or other rule violations) across ${cruiser.modules} modules.`,
+        fix: "Inspect the dependency-cruiser output, remove the forbidden edge or cycle, and push so the check reruns.",
+      });
     }
   }
 
   const introduced = introducedMajors(basePackage, headPackage);
   if (introduced.length) {
     const list = introduced.map((m) => `\`${m.name}\` ${m.from} → ${m.to}`).join(", ");
-    if (failOnMajors) {
-      failures.push({ check: "Major upgrades", reason: `This PR introduces major version bumps: ${list}.`, fix: "Move each major upgrade into its own PR, or set `fail-on-majors: false`." });
-    } else warnings.push(`This PR introduces major version bumps: ${list}.`);
+    if (allowMajorUpgrade) {
+      warnings.push(`This PR introduces major version bumps: ${list}. Allowed by the allow-major-upgrade label.`);
+    } else if (failOnMajors) {
+      failures.push({
+        check: "Majors introduced",
+        reason: `This PR introduces major version bumps: ${list}.`,
+        fix: "Move each major upgrade into its own PR, or add the `allow-major-upgrade` label. To opt the repository out of this gate, set `fail-on-majors: false`.",
+      });
+    } else {
+      warnings.push(`This PR introduces major version bumps: ${list}.`);
+    }
+  }
+
+  if (failOnHighFindings) {
+    const elevated = elevatedFindings(review);
+    if (elevated.length) {
+      const list = elevated.map(describeFinding).join("; ");
+      failures.push({
+        check: "Architecture findings",
+        reason: `High or critical architecture findings: ${list}.`,
+        fix: "Address or justify each high or critical finding in the PR review breakdown below, push, and let the review rerun. Medium and low findings are advisory.",
+      });
+    }
+  }
+
+  if (failOnAreaFail) {
+    const areas = failedAreas(review);
+    if (areas.length) {
+      const list = areas.map((area) => `${area.area}${area.evidence ? ` (${area.evidence})` : ""}`).join("; ");
+      failures.push({
+        check: "Areas",
+        reason: `Review areas marked fail: ${list}.`,
+        fix: "Address the failed area(s) in the PR review breakdown below, push, and let the review rerun.",
+      });
+    }
   }
 
   let available = [];
@@ -140,7 +197,9 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
     available = [];
   }
 
-  return { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, cruiserDetails, cruiserRequested: Boolean(cruiserRequested), introduced, availableMajors: available, review, failOnHigh, failOnMajors };
+  const result = { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, cruiserDetails, cruiserRequested: Boolean(cruiserRequested), introduced, availableMajors: available, review, failOnHigh, failOnMajors, failOnHighFindings, failOnAreaFail, allowMajorUpgrade, labels: parseLabels(labels), releaseSuggestion, title, body, changedFiles, headRef };
+  result.severityStatus = severityStatus(result);
+  return result;
 }
 
 export function renderGateSummary(result, options) {
@@ -170,10 +229,18 @@ export async function runGate({ cwd = process.cwd(), env = process.env, stdout =
     headPackage: json(await readOptional(path.resolve(cwd, "package.json"))),
     outdatedText: await readOptional(path.join(dir, "npm-outdated.txt")),
     failOnHigh: env.FAIL_ON_HIGH !== "false",
-    failOnMajors: env.FAIL_ON_MAJORS === "true",
+    failOnMajors: env.FAIL_ON_MAJORS !== "false",
+    failOnHighFindings: env.FAIL_ON_HIGH_FINDINGS !== "false",
+    failOnAreaFail: env.FAIL_ON_AREA_FAIL !== "false",
+    labels: env.PR_LABELS || "",
+    title: env.PR_TITLE || "",
+    body: env.PR_BODY || "",
+    changedFiles: await readOptional(path.join(dir, "changed-files.txt")),
+    headRef: env.HEAD_REF || "",
   });
   const summary = renderGateSummary(result);
   await fs.writeFile(path.resolve(cwd, "pr-gate.md"), summary);
+  await fs.writeFile(path.resolve(cwd, "pr-approval.md"), `${renderApprovalComment(result)}\n`);
   if (env.GITHUB_STEP_SUMMARY) await fs.appendFile(env.GITHUB_STEP_SUMMARY, `${summary}\n`);
   stdout.write(`${summary}\n`);
   for (const f of result.failures) stderr.write(`::error title=PR intelligence gate (${f.check})::${f.reason} ${f.fix}\n`.replace(/\n(?!$)/g, " "));

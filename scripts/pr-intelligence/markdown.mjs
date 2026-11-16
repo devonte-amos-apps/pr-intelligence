@@ -25,7 +25,8 @@ export function tableCell(value, maxCharacters) {
   return compactText(value, maxCharacters).replaceAll("|", "\\|");
 }
 
-export function areaStatus(status) {
+export function areaStatus(status, { failOnAreaFail = true } = {}) {
+  if (status === "fail" && failOnAreaFail !== false) return "❌ Fail (blocks gate)";
   return {
     pass: "✅ Pass",
     warn: "⚠️ Warn",
@@ -34,10 +35,11 @@ export function areaStatus(status) {
   }[status] || "➖ Unknown";
 }
 
-/** Findings do not independently fail the gate; only overall review risk can. */
-export function findingSeverityLabel(severity) {
+/** High/critical findings block the gate unless fail-on-high-findings is off. */
+export function findingSeverityLabel(severity, { failOnHighFindings = true } = {}) {
   const level = String(severity || "").toLowerCase() || "unknown";
-  return `${level} (advisory)`;
+  const blocks = failOnHighFindings !== false && (level === "high" || level === "critical");
+  return `${level} (${blocks ? "blocks gate" : "advisory"})`;
 }
 
 export function firstParagraph(text, maxCharacters = 200) {

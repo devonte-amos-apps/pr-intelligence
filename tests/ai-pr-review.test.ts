@@ -82,7 +82,7 @@ describe("PR architecture review failures", () => {
     expect(markdown).toContain("## PR review breakdown")
   })
 
-  it("marks architecture findings as advisory, not gate-blocking", () => {
+  it("marks high architecture findings as blocks-gate by default", () => {
     const review = parseStructuredReview(
       JSON.stringify({
         risk: "high",
@@ -102,8 +102,7 @@ describe("PR architecture review failures", () => {
       }),
     )
     const markdown = renderStructuredReview(review, { title: "Reject back-dated withdrawals", number: "84", url: "https://github.com/devcamos/drip/pull/84" }, {})
-    expect(markdown).toContain("high (advisory)")
-    expect(markdown).not.toContain("blocks gate")
+    expect(markdown).toContain("high (blocks gate)")
     expect(markdown).toContain("ARCH-004")
     expect(markdown).toContain("[Reject back-dated withdrawals](https://github.com/devcamos/drip/pull/84)")
   })

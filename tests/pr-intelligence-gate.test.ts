@@ -12,8 +12,11 @@ import {
   parseCruiserModules,
   parseCruiserReport,
   parseRisk,
+  renderApprovalComment,
   renderGateSummary,
   runGate,
+  suggestRelease,
+  severityStatus,
 } from "../scripts/pr-intelligence/gate.mjs"
 
 const audit = (high = 0, critical = 0, vulnerabilities = {}) =>
@@ -92,12 +95,21 @@ describe("evaluateGate", () => {
     expect(evaluateGate({ ...base, cruiserRequested: true, cruiserText: "dependency-cruiser is not installed; skipped." }).warnings.join()).toMatch(/not installed/)
     expect(evaluateGate({ ...base, cruiserRequested: false, cruiserText: "(0 modules, 0 dependencies cruised)" }).passed).toBe(true)
   })
-  it("warns on majors by default and fails when fail-on-majors is true", () => {
+  it("fails on majors by default and warns when fail-on-majors is false", () => {
     const pk = { basePackage: { dependencies: { zod: "^3.0.0" } }, headPackage: { dependencies: { zod: "^4.0.0" } } }
-    const warn = evaluateGate({ ...base, ...pk })
+    const fail = evaluateGate({ ...base, ...pk })
+    expect(fail.passed).toBe(false)
+    expect(fail.failures[0].check).toBe("Majors introduced")
+    const warn = evaluateGate({ ...base, ...pk, failOnMajors: false })
     expect(warn.passed).toBe(true)
     expect(warn.warnings.join()).toMatch(/zod/)
-    expect(evaluateGate({ ...base, ...pk, failOnMajors: true }).failures[0].check).toBe("Major upgrades")
+  })
+  it("allows majors when the allow-major-upgrade label is present", () => {
+    const pk = { basePackage: { dependencies: { zod: "^3.0.0" } }, headPackage: { dependencies: { zod: "^4.0.0" } } }
+    const r = evaluateGate({ ...base, ...pk, labels: ["allow-major-upgrade"] })
+    expect(r.passed).toBe(true)
+    expect(r.warnings.join()).toMatch(/allow-major-upgrade/)
+    expect(renderGateSummary(r)).toMatch(/allowed by allow-major-upgrade/)
   })
   it("lists available majors from npm outdated as warnings", () => {
     const r = evaluateGate({
@@ -139,10 +151,11 @@ describe("runGate", () => {
     await fs.writeFile(path.join(dir, ".pr-architecture", "dependency-cruiser.txt"), "(3 modules, 1 dependencies cruised)")
     const summaryFile = path.join(dir, "summary.md")
     const r = await runGate({ cwd: dir, stdout: silent, stderr: silent, env: { DEPCRUISE_DIRS: "src", FAIL_ON_MAJORS: "true", GITHUB_STEP_SUMMARY: summaryFile } })
-    expect(r.failures.map((f) => f.check)).toEqual(["npm audit", "Major upgrades"])
+    expect(r.failures.map((f) => f.check)).toEqual(["npm audit", "Majors introduced"])
     expect(process.exitCode).toBe(1)
     expect(await fs.readFile(summaryFile, "utf8")).toMatch(/PR intelligence gate/)
     expect(await fs.readFile(path.join(dir, "pr-gate.md"), "utf8")).toMatch(/3 modules/)
+    expect(await fs.readFile(path.join(dir, "pr-approval.md"), "utf8")).toMatch(/not approved/)
   })
   it("passes with missing optional files", async () => {
     dir = await fs.mkdtemp(path.join(os.tmpdir(), "gate-"))
@@ -194,8 +207,8 @@ describe("parseCruiserReport", () => {
   })
 })
 
-describe("evaluateGate presentation vs gating", () => {
-  it("does not fail on high findings when overall risk is medium", () => {
+describe("evaluateGate tightened matrix", () => {
+  it("fails on high findings even when overall risk is medium", () => {
     const r = evaluateGate({
       ...base,
       riskText: JSON.stringify({
@@ -203,36 +216,86 @@ describe("evaluateGate presentation vs gating", () => {
         findings: [{ severity: "high", ruleId: "ARCH-004", evidence: ["lib/maths.ts"], impact: "x", recommendation: "y" }],
       }),
     })
-    expect(r.passed).toBe(true)
-    expect(r.failures).toEqual([])
+    expect(r.passed).toBe(false)
+    expect(r.failures[0].check).toBe("Architecture findings")
     const text = renderGateSummary(r)
-    expect(text).toMatch(/✅ passed/)
+    expect(text).toMatch(/❌ failed/)
     expect(text).toContain("ARCH-004 high")
-    expect(text).toContain(GATE_POLICY.checks.findings.trigger)
-    expect(text).toContain("high (advisory)")
+    expect(text).toContain(GATE_POLICY.checks.findings.matrixTrigger)
+    expect(text).toContain("high (blocks gate)")
   })
 
-  it("does not fail when dependency-cruiser reports errors but checked modules", () => {
+  it("keeps medium findings and area warns advisory", () => {
+    const r = evaluateGate({
+      ...base,
+      riskText: JSON.stringify({
+        risk: "low",
+        findings: [{ severity: "medium", ruleId: "ARCH-008", evidence: ["tests/gaps.test.ts"], impact: "x", recommendation: "y" }],
+        areas: [{ area: "Docs", status: "warn", evidence: "README.md" }],
+      }),
+    })
+    expect(r.passed).toBe(true)
+    expect(renderGateSummary(r)).toContain("medium (advisory)")
+  })
+
+  it("does not fail high findings when fail-on-high-findings is off", () => {
+    const r = evaluateGate({
+      ...base,
+      failOnHighFindings: false,
+      riskText: JSON.stringify({
+        risk: "medium",
+        findings: [{ severity: "high", ruleId: "ARCH-004", evidence: ["lib/maths.ts"], impact: "x", recommendation: "y" }],
+      }),
+    })
+    expect(r.passed).toBe(true)
+    expect(renderGateSummary(r)).toContain("high (advisory)")
+  })
+
+  it("fails when dependency-cruiser reports errors even if modules were checked", () => {
     const r = evaluateGate({
       ...base,
       cruiserRequested: true,
       cruiserText: "x 1 dependency violations (1 errors, 0 warnings). 144 modules, 411 dependencies cruised.",
     })
-    expect(r.passed).toBe(true)
+    expect(r.passed).toBe(false)
+    expect(r.failures[0].check).toBe("dependency-cruiser")
     expect(r.cruiserDetails.errors).toBe(1)
     const text = renderGateSummary(r)
-    expect(text).toMatch(/Pass \(144 modules, 411 dependencies checked; 1 cruiser error\(s\) recorded, advisory\)/)
+    expect(text).toMatch(/Fail \(144 modules, 411 dependencies checked; 1 cruiser error\(s\)\)/)
   })
 
-  it("still only fails majors when fail-on-majors is true", () => {
+  it("fails a failed review area and allows opting out", () => {
+    const fail = evaluateGate({
+      ...base,
+      riskText: JSON.stringify({
+        risk: "low",
+        areas: [{ area: "Data Integrity", status: "fail", evidence: "lib/maths.ts" }],
+        findings: [],
+      }),
+    })
+    expect(fail.passed).toBe(false)
+    expect(fail.failures[0].check).toBe("Areas")
+    expect(renderGateSummary(fail)).toContain("❌ Fail (blocks gate)")
+    const ok = evaluateGate({
+      ...base,
+      failOnAreaFail: false,
+      riskText: JSON.stringify({
+        risk: "low",
+        areas: [{ area: "Data Integrity", status: "fail", evidence: "lib/maths.ts" }],
+        findings: [],
+      }),
+    })
+    expect(ok.passed).toBe(true)
+  })
+
+  it("renders a majors failure and the fail-on-majors opt-out", () => {
     const pk = { basePackage: { dependencies: { zod: "^3.0.0" } }, headPackage: { dependencies: { zod: "^4.0.0" } } }
-    const warn = renderGateSummary(evaluateGate({ ...base, ...pk }))
-    expect(warn).toMatch(/✅ passed/)
-    expect(warn).toMatch(/fail-on-majors is off/)
-    expect(warn).toContain("There is no PR-label override")
-    const fail = evaluateGate({ ...base, ...pk, failOnMajors: true })
+    const fail = evaluateGate({ ...base, ...pk })
     expect(fail.passed).toBe(false)
     expect(renderGateSummary(fail)).toMatch(/Fail \(1: zod \^3\.0\.0 → \^4\.0\.0\)/)
+    const warn = renderGateSummary(evaluateGate({ ...base, ...pk, failOnMajors: false }))
+    expect(warn).toMatch(/✅ passed/)
+    expect(warn).toMatch(/fail-on-majors is off/)
   })
 })
 
@@ -252,17 +315,23 @@ describe("renderGateSummary layout", () => {
     expect(text).toContain("| dependency-cruiser | Gate | Pass (144 modules, 411 dependencies checked) |")
     expect(text).toContain("| Majors introduced | Gate | Pass (0) |")
     expect(text).toContain("| Review risk | Gate | Fail (HIGH) |")
-    expect(text).toContain("| Architecture findings | RFC / Review | 2 findings (ARCH-004 high, ARCH-008 medium) |")
+    expect(text).toContain("| Architecture findings | RFC / Review | Fail (2 findings (ARCH-004 high, ARCH-008 medium)) |")
+    expect(text).toContain("| Areas | RFC / Review | Pass (no failed areas) |")
     expect(text).toContain("Driven by: ARCH-004 (high) in lib/maths.ts.")
     expect(text).toContain("Verify or acknowledge the ARCH-004 high finding in the PR review breakdown below")
-    expect(text).not.toMatch(/\*\*Architecture findings:\*\*/)
     expect(text).toContain("## PR review breakdown")
     expect(text).toContain("| Risk | PR Summary |")
     expect(text).toContain("[Reject back-dated withdrawals larger than the balance on that date](https://github.com/devcamos/drip/pull/84)")
     expect(text).toContain("| Data Integrity | ✅ Pass | lib/maths.ts |")
     expect(text).toContain("| Unit Tests | ✅ Pass | tests/gaps.test.ts |")
-    expect(text).toContain("| high (advisory) | ARCH-004 | lib/maths.ts |")
+    expect(text).toContain("| high (blocks gate) | ARCH-004 | lib/maths.ts |")
     expect(text).toContain("| medium (advisory) | ARCH-008 | tests/gaps.test.ts |")
+    expect(text).toContain("### Release suggestion")
+    expect(text).toContain("**patch**")
+    expect(text).toContain("### Severity status")
+    expect(text).toMatch(/Blocked:.*ARCH-004/)
+    expect(renderApprovalComment(r)).toMatch(/not approved/)
+    expect(r.failures.map((f) => f.check)).toEqual(["Review risk", "Architecture findings"])
     expect(text).toContain("<details>")
     expect(text).toContain("<summary>What outcomes can fail the intelligence review?</summary>")
     expect(text).toContain("#### Deterministic CI Gates")
@@ -271,15 +340,39 @@ describe("renderGateSummary layout", () => {
     expect(text).toContain(GATE_POLICY.checks.cruiser.trigger)
     expect(text).toContain(GATE_POLICY.checks.majors.matrixTrigger)
     expect(text).toContain(GATE_POLICY.checks.risk.matrixTrigger)
-    expect(text).toContain(GATE_POLICY.checks.findings.trigger)
-    expect(text).toContain(GATE_POLICY.checks.areas.trigger)
+    expect(text).toContain(GATE_POLICY.checks.findings.matrixTrigger)
+    expect(text).toContain(GATE_POLICY.checks.areas.matrixTrigger)
   })
 
   it("passes a clean PR with the new table layout", () => {
     const text = renderGateSummary(evaluateGate(base))
     expect(text).toMatch(/✅ passed/)
     expect(text).toContain("| Review risk | Gate | Pass (LOW) |")
-    expect(text).toContain("| Architecture findings | RFC / Review | 0 findings |")
+    expect(text).toContain("| Architecture findings | RFC / Review | Pass (0 findings) |")
+    expect(text).toContain("| Areas | RFC / Review | Pass (no failed areas) |")
+    expect(text).toContain("**Clear** — no high or critical blocking items remain.")
     expect(text).not.toContain("### Why it failed")
+    expect(renderApprovalComment(evaluateGate(base))).toBe("✅ PR intelligence: approved — severity clear, release: patch")
+  })
+})
+
+describe("suggestRelease and severity status", () => {
+  it("maps conventional titles, labels and fix branches", () => {
+    expect(suggestRelease({ title: "fix: reject oversized withdrawals" }).level).toBe("patch")
+    expect(suggestRelease({ title: "feat: add payout calendar" }).level).toBe("minor")
+    expect(suggestRelease({ title: "feat!: switch ledger format" }).level).toBe("major")
+    expect(suggestRelease({ title: "Update maths", body: "BREAKING CHANGE: new shape" }).level).toBe("major")
+    expect(suggestRelease({ title: "Reject back-dated withdrawals", body: "- [x] **No breaking DB migrations**\n- [x] **API Contract:** No breaking changes." }).level).toBe("patch")
+    expect(suggestRelease({ title: "Bump Zod", labels: ["semver:minor"] }).level).toBe("minor")
+    expect(suggestRelease({ title: "Reject back-dated withdrawals", headRef: "fix/80-backdated-withdrawal" }).level).toBe("patch")
+    expect(suggestRelease({ title: "Docs only", changedFiles: "M\tdocs/README.md\nM\tAGENTS.md" }).level).toBe("patch")
+  })
+
+  it("is severity-clear only when no high or critical blockers remain", () => {
+    expect(severityStatus(evaluateGate(base)).clear).toBe(true)
+    const blocked = evaluateGate({ ...base, riskText: '{"risk":"high"}' })
+    expect(blocked.severityStatus.clear).toBe(false)
+    expect(blocked.severityStatus.summary).toMatch(/HIGH/)
+    expect(renderApprovalComment(blocked)).toMatch(/not approved/)
   })
 })

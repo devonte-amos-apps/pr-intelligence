@@ -4,6 +4,14 @@ Shared, reusable PR Architecture Intelligence review for personal and project re
 
 Each run collects the diff, `npm audit`, `npm ls`, tests, build and optional dependency-cruiser output, asks Gemini for a structured review against the **caller's own rules file**, and posts a sticky PR comment. It also adds a **Dependency upgrade suggestions** table for every direct (level-0) dependency: installed vs latest stable, patch/minor/major, with key-framework majors (React, Next.js, TypeScript, Prisma, Vitest, …) flagged and linked to release notes. The table is rendered even when Gemini is unavailable.
 
+## How it works
+
+Verification uses existing deterministic checks (`npm audit`, dependency-cruiser, and major-version detection) plus the thresholds in `GATE_POLICY` to decide whether the PR passes or fails.
+
+AI intelligence (Gemini, against each app's own ARCH rules) summarises the PR, explains the work, rates risk, and lists findings and areas. The AI risk rating and any high or critical findings also feed the gate — they can fail the PR when those checks are enabled, which is the default. A release suggestion (patch, minor, or major) comes from the conventional title, labels, or branch name, not from the model.
+
+Results are posted as sticky PR comments. The action never merges the PR.
+
 ## Usage
 
 ```yaml
@@ -25,7 +33,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 ```
 
-Inputs: `rules-path`, `node-version`, `dependency-cruiser-dirs`, `extra-env` (non-secret build placeholders), `gemini-model`. Secret: `GEMINI_API_KEY` (optional; without it the comment still shows diagnostics and upgrade suggestions).
+Inputs: `rules-path`, `node-version`, `dependency-cruiser-dirs`, `extra-env` (non-secret build placeholders), `gemini-model`, `fail-on-high`, `fail-on-majors` (default `true`), `fail-on-high-findings`, `fail-on-area-fail`, `tool-ref`. Secret: `GEMINI_API_KEY` (optional; without it the comment still shows diagnostics and upgrade suggestions).
 
 The rules file is JSON: `{ "project": "...", "reviewPrinciples": [...], "rules": [{ "id", "severity", "title", "description", "evidence" }] }`.
 
@@ -37,11 +45,17 @@ The workflow runs a second job, **PR intelligence gate**, that passes or fails t
 | --- | --- |
 | npm audit has any high or critical vulnerability | fail |
 | Review risk rated HIGH or CRITICAL (`fail-on-high`) | fail (skipped if the AI rating is unavailable) |
-| dependency-cruiser requested but checked 0 modules | fail |
-| PR introduces a major version bump (`fail-on-majors`) | warning (fail when `true`) |
+| dependency-cruiser requested and checked 0 modules, or reported errors > 0 | fail |
+| PR introduces a major version bump (`fail-on-majors`, default `true`) | fail, unless the PR has the `allow-major-upgrade` label. Set `fail-on-majors: false` to opt the repository out. |
+| Architecture finding with severity high or critical (`fail-on-high-findings`) | fail (medium and low stay advisory) |
+| Review area with status Fail (`fail-on-area-fail`) | fail |
 | Major upgrades available (npm outdated) | warning |
 
-The gate writes a job summary and a sticky PR comment with a check table (`Check | Type | Outcome | Failure Trigger`), a data-derived **Why it failed** section, a **PR review breakdown** (risk, PR title/body and model summary, areas, and findings), and a collapsible threshold matrix generated from the same policy object `evaluateGate` implements. Architecture findings and area results are shown as advisory; they do not independently fail the gate. After the gate runs, that comment is updated in place and consolidated with the architecture-review comment (markers `<!-- pr-intelligence-gate -->` and `<!-- pr-architecture-intelligence -->`) so reruns do not spam the thread.
+The gate writes a job summary and a sticky PR comment with a check table (`Check | Type | Outcome | Failure Trigger`), a data-derived **Why it failed** section, a **PR review breakdown**, a **Release suggestion** (semver patch/minor/major from the conventional title, labels, or branch name), a **Severity status** line (Clear when no high or critical blocking items remain), and a collapsible threshold matrix generated from the same policy object `evaluateGate` implements. High or critical findings are labelled **blocks gate**; medium and low stay **advisory**. After the gate runs, that comment is updated in place and consolidated with the architecture-review comment (markers `<!-- pr-intelligence-gate -->` and `<!-- pr-architecture-intelligence -->`) so reruns do not spam the thread.
+
+When the gate passes, a separate sticky comment (marker `<!-- pr-intelligence-approval -->`) is posted or updated: `✅ PR intelligence: approved — severity clear, release: patch`. If a later run fails, that comment is updated to a not-approved status so a stale approval cannot linger. This is a comment only — the action does not submit a GitHub review approval and never merges the PR.
+
+Create the `allow-major-upgrade` label in each consumer repository as a rollout step before relying on it to unblock a major-upgrade PR.
 
 `tool-ref` (default `v1`) selects which pr-intelligence ref runs the scripts; keep it in step with the ref in `uses:`.
 
