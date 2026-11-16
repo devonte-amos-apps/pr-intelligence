@@ -1,6 +1,7 @@
 // Renders the sticky PR intelligence comment from evaluateGate results and review data.
 // Threshold prose comes from GATE_POLICY in gate.mjs so the matrix cannot drift from the checks.
 
+import { filterFollowUps } from "./changes-from-diff.mjs";
 import { GATE_POLICY, findingList } from "./gate-policy.mjs";
 import { areaStatus, findingSeverityLabel, firstParagraph, proseCell, tableCell, trustedCell } from "./markdown.mjs";
 
@@ -189,7 +190,7 @@ export function renderReviewBreakdown(review, metadata = {}, options = {}) {
   return lines.join("\n");
 }
 
-export function renderDependenciesAndFollowUps(review, upgradeTable = "") {
+export function renderDependenciesAndFollowUps(review, upgradeTable = "", options = {}) {
   if (!review || review.unavailable) return upgradeTable ? `${upgradeTable}\n` : "";
   const lines = [];
   const dependencies = Array.isArray(review.dependencies) ? review.dependencies.slice(0, 5) : [];
@@ -203,7 +204,10 @@ export function renderDependenciesAndFollowUps(review, upgradeTable = "") {
   }
   lines.push("");
   if (upgradeTable) lines.push(upgradeTable, "");
-  const followUps = Array.isArray(review.followUps) ? review.followUps.slice(0, 3) : [];
+  const followUps = filterFollowUps(
+    Array.isArray(review.followUps) ? review.followUps.slice(0, 3) : [],
+    { diff: options.diff || review?.diff || "", changedFiles: options.changedFiles || review?.changedFiles || "" },
+  );
   lines.push("### Follow-ups", "");
   if (followUps.length) {
     for (const item of followUps) lines.push(`- [ ] ${tableCell(item, 180)}`);
@@ -214,20 +218,41 @@ export function renderDependenciesAndFollowUps(review, upgradeTable = "") {
   return lines.join("\n");
 }
 
-export function renderGateLead(review) {
+export function renderGateLead(review, changes) {
   const lines = [];
   const logic = review && !review.unavailable && typeof review.summary === "string"
     ? review.summary.trim()
     : "";
   if (logic) lines.push("### Summary", "", proseCell(logic, 500), "");
-  const changes = review?.changes;
-  const hasChanges = changes && typeof changes === "object"
-    && (changes.added || changes.refactored || changes.removed);
-  if (hasChanges) {
-    const item = (label, value) => `- **${label}:** ${proseCell(value || "None", 500)}`;
-    lines.push("### What this PR changes", "");
-    lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed), "");
-  }
+  const derived = changes && changes.kind
+    ? changes
+    : review?.derivedChanges;
+  const list = renderChangeList(derived);
+  if (list.length) lines.push(...list);
+  return lines;
+}
+
+function formatChangeItems(items, label) {
+  if (!items?.length) return `- **${label}:** None`;
+  const parts = items.map((entry) => {
+    if (entry.from && entry.path) return `\`${entry.from}\` → \`${entry.path}\``;
+    const target = entry.name ? `\`${entry.name}\` in \`${entry.path}\`` : `\`${entry.path}\``;
+    const description = entry.description ? ` — ${proseCell(entry.description, 160)}` : "";
+    return `${target}${description}`;
+  });
+  return `- **${label}:** ${parts.join("; ")}`;
+}
+
+export function renderChangeList(changes) {
+  if (!changes) return [];
+  const hasItems = ["added", "modified", "removed", "renamed"].some((key) => changes[key]?.length);
+  if (!hasItems) return [];
+  const lines = ["### What this PR changes", ""];
+  lines.push(formatChangeItems(changes.added, "Added"));
+  lines.push(formatChangeItems(changes.modified, "Refactored"));
+  lines.push(formatChangeItems(changes.removed, "Removed"));
+  if (changes.renamed?.length) lines.push(formatChangeItems(changes.renamed, "Renamed"));
+  lines.push("");
   return lines;
 }
 
@@ -235,7 +260,7 @@ export function renderGateComment(result, { metadata, upgradeTable } = {}) {
   const review = result.review;
   const meta = metadata || review?.metadata || {};
   const lines = [`## PR intelligence gate: ${result.passed ? "✅ passed" : "❌ failed"}`, ""];
-  lines.push(...renderGateLead(review));
+  lines.push(...renderGateLead(review, result.derivedChanges));
   lines.push("| Check | Type | Outcome | Failure Trigger |", "| --- | --- | --- | --- |");
   for (const row of buildCheckRows(result)) {
     lines.push(`| ${trustedCell(row.check)} | ${trustedCell(row.type)} | ${tableCell(row.outcome, 220)} | ${trustedCell(row.trigger)} |`);
@@ -256,7 +281,7 @@ export function renderGateComment(result, { metadata, upgradeTable } = {}) {
   }
 
   lines.push(renderReviewBreakdown(review, meta, policyFlags(result)));
-  lines.push(renderDependenciesAndFollowUps(review, upgradeTable));
+  lines.push(renderDependenciesAndFollowUps(review, upgradeTable, { diff: result.diffText, changedFiles: result.changedFiles }));
 
   const release = result.releaseSuggestion;
   if (release?.level) {

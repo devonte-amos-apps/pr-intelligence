@@ -1,0 +1,156 @@
+diff --git a/lib/maths.ts b/lib/maths.ts
+index fdf884c..f2340b9 100644
+--- a/lib/maths.ts
++++ b/lib/maths.ts
+@@ -235,9 +235,27 @@ export function applyTopUp<A extends Pick<Account, "balance" | "events">>(a: A,
+ export function applyWithdraw<A extends Pick<Account, "balance" | "events">>(a: A, amount: number, date: string): A {
+   if (!(amount > 0)) throw new Error("Withdrawal must be more than £0");
+   if (amount > a.balance + 1e-9) throw new Error("You can't withdraw more than the balance");
++  if (amount > lowestBalanceFrom(a, date) + 1e-9) throw new Error("You can't withdraw more than the balance on that date. Check the date, or log the top-up that came first.");
+   return withEvent(a, a.balance - amount, "withdraw", date, amount);
+ }
+ 
++/**
++ * Lowest running balance from the end of `date` (after that day's logged events) until the next
++ * manual balance update after it. A back-dated withdrawal must fit within this, or the history goes below zero.
++ */
++function lowestBalanceFrom(a: Pick<Account, "balance" | "events">, date: string): number {
++  let balance = confirmedBalanceOn(a, date), lowest = Infinity;
++  const ordered = (a.events ?? []).map((event, index) => ({ event, index }))
++    .filter(({ event }) => event.date >= date && (event.type === "topup" || event.type === "withdraw" || event.type === "set"))
++    .sort((x, y) => x.event.date.localeCompare(y.event.date) || x.index - y.index).map(({ event }) => event);
++  for (const event of ordered) {
++    if (event.date > date && lowest > balance) lowest = balance;
++    if (event.type === "set") { if (event.date > date) break; balance = event.amount; }
++    else balance += event.type === "topup" ? event.amount : -event.amount;
++  }
++  return Math.min(lowest, balance);
++}
++
+ /** Record a rate change effective from `date`; ratePct becomes the rate in force on `today`. */
+ export function applyRateChange<A extends Pick<Account, "ratePct" | "rateHistory" | "createdAt">>(a: A, ratePct: number, date: string, today: string): A {
+   if (!(ratePct >= 0 && ratePct < 100)) throw new Error("Rate must be between 0% and 100%");
+diff --git a/tests/gaps.test.ts b/tests/gaps.test.ts
+index fe89296..6604a30 100644
+--- a/tests/gaps.test.ts
++++ b/tests/gaps.test.ts
+@@ -63,3 +63,119 @@ describe("rate history", () => {
+     expect(d.accounts[1].ratePct).toBe(5);
+   });
+ });
++
++describe("back-dated withdrawals (#80)", () => {
++  const withEvents = (balance: number, events: Parameters<typeof M.applyWithdraw>[0]["events"]) => ({ balance, events });
++  it("rejects a withdrawal larger than the balance on its date, even when today's balance covers it", () => {
++    // £200 on 1 Oct, £500 top-up on 10 Oct: £700 today, but only £200 on 5 Oct.
++    const a = withEvents(700, [{ type: "topup", date: "2026-10-10", amount: 500 }]);
++    expect(() => M.applyWithdraw(a, 300, "2026-10-05")).toThrow(/balance on that date/);
++    expect(M.applyWithdraw(a, 200, "2026-10-05").balance).toBe(500);
++    expect(M.applyWithdraw(a, 300, "2026-10-10").balance).toBe(400);
++  });
++  it("rejects a withdrawal that would take a later point in the history below zero", () => {
++    // £100, −£90 on 10 Oct, +£500 on 20 Oct: £510 today. £50 on 5 Oct would leave −£40 after 10 Oct.
++    const a = withEvents(510, [{ type: "withdraw", date: "2026-10-10", amount: 90 }, { type: "topup", date: "2026-10-20", amount: 500 }]);
++    expect(() => M.applyWithdraw(a, 50, "2026-10-05")).toThrow(/balance on that date/);
++    expect(M.applyWithdraw(a, 10, "2026-10-05").balance).toBe(500);
++    expect(M.applyWithdraw(a, 510, "2026-10-21").balance).toBe(0);
++  });
++  it("counts same-day events first and stops at the next manual balance update", () => {
++    const sameDay = withEvents(500, [{ type: "topup", date: "2026-10-05", amount: 400 }]);
++    expect(M.applyWithdraw(sameDay, 500, "2026-10-05").balance).toBe(0);
++    // A later confirmed reading already reflects real withdrawals, so only the stretch before it must stay positive.
++    const reset = withEvents(1000, [{ type: "topup", date: "2026-10-10", amount: 500 }, { type: "set", date: "2026-10-15", amount: 1000 }]);
++    expect(() => M.applyWithdraw(reset, 800, "2026-10-12")).not.toThrow();
++    expect(() => M.applyWithdraw(reset, 900, "2026-10-05")).toThrow(/balance on that date/);
++    const setSameDay = withEvents(300, [{ type: "set", date: "2026-10-05", amount: 300 }]);
++    expect(M.applyWithdraw(setSameDay, 300, "2026-10-05").balance).toBe(0);
++  });
++});
++
++describe("back-dated withdrawal invariants across manual balance updates (ARCH-004)", () => {
++  type WithdrawAccount = Parameters<typeof M.applyWithdraw>[0];
++  const withEvents = (balance: number, events: NonNullable<WithdrawAccount["events"]>) => ({ balance, events });
++
++  /** Cash running balances from `fromDate` until the next later manual `set` (that set is not applied). */
++  function runningBalancesUntilNextSet(account: WithdrawAccount, fromDate: string) {
++    let balance = M.confirmedBalanceOn(account, fromDate);
++    const balances: number[] = [];
++    const ordered = [...(account.events ?? [])]
++      .map((event, index) => ({ event, index }))
++      .filter(({ event }) => event.date >= fromDate && (event.type === "topup" || event.type === "withdraw" || event.type === "set"))
++      .sort((x, y) => x.event.date.localeCompare(y.event.date) || x.index - y.index)
++      .map(({ event }) => event);
++    for (const event of ordered) {
++      if (event.date > fromDate && event.type === "set") break;
++      if (event.type === "set") balance = event.amount;
++      else balance += event.type === "topup" ? event.amount : -event.amount;
++      balances.push(Number(balance.toFixed(2)));
++    }
++    return balances;
++  }
++
++  function expectInvariantHolds(account: WithdrawAccount, fromDate: string) {
++    expect(account.balance).toBeGreaterThanOrEqual(0);
++    for (const balance of runningBalancesUntilNextSet(account, fromDate)) {
++      expect(balance).toBeGreaterThanOrEqual(0);
++    }
++  }
++
++  it("allows a withdrawal exactly equal to the lowest balance in the stretch, and the history stays at or above zero", () => {
++    const a = withEvents(700, [{ type: "topup", date: "2026-10-10", amount: 500 }]);
++    const next = M.applyWithdraw(a, 200, "2026-10-05");
++    expect(next.balance).toBe(500);
++    expectInvariantHolds(next, "2026-10-05");
++    expect(runningBalancesUntilNextSet(next, "2026-10-05")[0]).toBe(0);
++    expect(() => M.applyWithdraw(a, 200.01, "2026-10-05")).toThrow(/balance on that date/);
++  });
++
++  it("enforces the invariant on a manual update day (same-day set is applied; a later set is a boundary)", () => {
++    const onSetDay = withEvents(1000, [
++      { type: "set", date: "2026-10-05", amount: 300 },
++      { type: "topup", date: "2026-10-20", amount: 700 },
++    ]);
++    const exact = M.applyWithdraw(onSetDay, 300, "2026-10-05");
++    expect(exact.balance).toBe(700);
++    expectInvariantHolds(exact, "2026-10-05");
++    expect(() => M.applyWithdraw(onSetDay, 300.01, "2026-10-05")).toThrow(/balance on that date/);
++
++    // The confirmed reading on 15 Oct already reflects later reality, so only the stretch before it must stay non-negative.
++    const beforeLaterSet = withEvents(1000, [
++      { type: "topup", date: "2026-10-10", amount: 500 },
++      { type: "set", date: "2026-10-15", amount: 1000 },
++    ]);
++    const beforeTopup = M.applyWithdraw(beforeLaterSet, 500, "2026-10-05");
++    expectInvariantHolds(beforeTopup, "2026-10-05");
++    expect(() => M.applyWithdraw(beforeLaterSet, 500.01, "2026-10-05")).toThrow(/balance on that date/);
++    const afterTopup = M.applyWithdraw(beforeLaterSet, 800, "2026-10-12");
++    expectInvariantHolds(afterTopup, "2026-10-12");
++  });
++
++  it("keeps the history non-negative before the first manual update", () => {
++    const beforeAnySet = withEvents(400, [{ type: "topup", date: "2026-10-20", amount: 100 }]);
++    const next = M.applyWithdraw(beforeAnySet, 300, "2026-10-05");
++    expect(next.balance).toBe(100);
++    expectInvariantHolds(next, "2026-10-05");
++    expect(() => M.applyWithdraw(beforeAnySet, 301, "2026-10-05")).toThrow(/balance on that date/);
++  });
++
++  it("stops at the next of several manual updates, and does not let a later stretch go below zero", () => {
++    // 1 Oct set £400, 8 Oct withdraw £50, 15 Oct set £800, 22 Oct top-up £200 → £1,000 today.
++    const a = withEvents(1000, [
++      { type: "set", date: "2026-10-01", amount: 400 },
++      { type: "withdraw", date: "2026-10-08", amount: 50 },
++      { type: "set", date: "2026-10-15", amount: 800 },
++      { type: "topup", date: "2026-10-22", amount: 200 },
++    ]);
++    // 3 Oct is in the first stretch (after £400, before the 8 Oct £50). Lowest in that stretch is £350.
++    const allowed = M.applyWithdraw(a, 350, "2026-10-03");
++    expect(allowed.balance).toBe(650);
++    expectInvariantHolds(allowed, "2026-10-03");
++    expect(() => M.applyWithdraw(a, 351, "2026-10-03")).toThrow(/balance on that date/);
++    // After the 15 Oct reading, the later stretch is independent and can support a larger withdrawal.
++    const afterSecondSet = M.applyWithdraw(a, 800, "2026-10-16");
++    expect(afterSecondSet.balance).toBe(200);
++    expectInvariantHolds(afterSecondSet, "2026-10-16");
++  });
++});

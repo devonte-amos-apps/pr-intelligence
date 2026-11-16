@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { renderGateComment } from "./comment-layout.mjs";
+import { deriveChangesFromDiff } from "./changes-from-diff.mjs";
 import { directDependencies, parseOutdated, buildUpgradeSuggestions } from "./dependency-upgrades.mjs";
 import {
   failedAreas,
@@ -98,7 +99,7 @@ export function introducedMajors(basePackage, headPackage) {
     .map(([name, d]) => ({ name, from: base.get(name).range, to: d.range }));
 }
 
-export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = true, failOnHighFindings = true, failOnAreaFail = true, labels = [], title = "", body = "", changedFiles = "", headRef = "", review: reviewInput } = {}) {
+export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = true, failOnHighFindings = true, failOnAreaFail = true, labels = [], title = "", body = "", changedFiles = "", diffText = "", headRef = "", review: reviewInput } = {}) {
   const failures = [];
   const warnings = [];
   const audit = auditCounts(auditText);
@@ -197,7 +198,7 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
     available = [];
   }
 
-  const result = { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, cruiserDetails, cruiserRequested: Boolean(cruiserRequested), introduced, availableMajors: available, review, failOnHigh, failOnMajors, failOnHighFindings, failOnAreaFail, allowMajorUpgrade, labels: parseLabels(labels), releaseSuggestion, title, body, changedFiles, headRef };
+  const result = { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, cruiserDetails, cruiserRequested: Boolean(cruiserRequested), introduced, availableMajors: available, review, failOnHigh, failOnMajors, failOnHighFindings, failOnAreaFail, allowMajorUpgrade, labels: parseLabels(labels), releaseSuggestion, title, body, changedFiles, diffText, derivedChanges: deriveChangesFromDiff({ changedFiles, diff: diffText, review }), headRef };
   result.severityStatus = severityStatus(result);
   return result;
 }
@@ -236,6 +237,7 @@ export async function runGate({ cwd = process.cwd(), env = process.env, stdout =
     title: env.PR_TITLE || "",
     body: env.PR_BODY || "",
     changedFiles: await readOptional(path.join(dir, "changed-files.txt")),
+    diffText: await readOptional(path.join(dir, "diff.patch")),
     headRef: env.HEAD_REF || "",
   });
   const summary = renderGateSummary(result);
