@@ -25,6 +25,31 @@ export function tableCell(value, maxCharacters) {
   return compactText(value, maxCharacters).replaceAll("|", "\\|");
 }
 
+/** Escape and compact prose, then shorten at a sentence boundary when possible. */
+export function compactProse(value, maxCharacters = 500) {
+  const compact = redactSecretValues(value)
+    .replaceAll("@", "@\u200b")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (compact.length <= maxCharacters) return compact;
+  const window = compact.slice(0, maxCharacters);
+  const ends = [...window.matchAll(/[.!?](?=\s|$)/g)];
+  const minKeep = Math.min(80, Math.floor(maxCharacters * 0.4));
+  if (ends.length) {
+    const end = ends[ends.length - 1].index + 1;
+    if (end >= minKeep) return compact.slice(0, end).trimEnd();
+  }
+  const lastSpace = window.lastIndexOf(" ");
+  const cut = lastSpace >= minKeep ? lastSpace : Math.max(0, maxCharacters - 1);
+  return `${compact.slice(0, cut).trimEnd()}…`;
+}
+
+export function proseCell(value, maxCharacters = 500) {
+  return compactProse(value, maxCharacters).replaceAll("|", "\\|");
+}
+
 export function areaStatus(status, { failOnAreaFail = true } = {}) {
   if (status === "fail" && failOnAreaFail !== false) return "❌ Fail (blocks gate)";
   return {

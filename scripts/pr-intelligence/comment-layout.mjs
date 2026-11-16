@@ -2,7 +2,7 @@
 // Threshold prose comes from GATE_POLICY in gate.mjs so the matrix cannot drift from the checks.
 
 import { GATE_POLICY, findingList } from "./gate-policy.mjs";
-import { areaStatus, findingSeverityLabel, firstParagraph, tableCell, trustedCell } from "./markdown.mjs";
+import { areaStatus, findingSeverityLabel, firstParagraph, proseCell, tableCell, trustedCell } from "./markdown.mjs";
 
 export const MISSING_RULES_NOTICE = "No architecture rules file found — PR-focused review only";
 
@@ -136,29 +136,11 @@ export function renderThresholdMatrix(result = {}) {
   return lines.join("\n");
 }
 
-function renderWhatChanged(review) {
-  const lines = ["### What this PR changes", ""];
-  const changes = review?.changes;
-  const hasChanges = changes && typeof changes === "object"
-    && (changes.added || changes.refactored || changes.removed);
-  if (hasChanges) {
-    const item = (label, value) => `- **${label}:** ${tableCell(value || "None", 240)}`;
-    lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed));
-  } else if (review && !review.unavailable && review.summary) {
-    lines.push(tableCell(review.summary, 400));
-  } else {
-    lines.push("No change summary was provided.");
-  }
-  lines.push("");
-  return lines;
-}
-
 export function renderReviewBreakdown(review, metadata = {}, options = {}) {
   const lines = ["## PR review breakdown", ""];
   if (review && review.rulesFound === false) {
     lines.push(`> ${review.rulesNotice || MISSING_RULES_NOTICE}`, "");
   }
-  lines.push(...renderWhatChanged(review));
 
   lines.push("### Risk", "", "| Risk | PR Summary |", "| --- | --- |");
   if (!review || review.unavailable) {
@@ -237,12 +219,12 @@ export function renderGateLead(review) {
   const logic = review && !review.unavailable && typeof review.summary === "string"
     ? review.summary.trim()
     : "";
-  if (logic) lines.push(tableCell(logic, 400), "");
+  if (logic) lines.push("### Summary", "", proseCell(logic, 500), "");
   const changes = review?.changes;
   const hasChanges = changes && typeof changes === "object"
     && (changes.added || changes.refactored || changes.removed);
   if (hasChanges) {
-    const item = (label, value) => `- **${label}:** ${tableCell(value || "None", 240)}`;
+    const item = (label, value) => `- **${label}:** ${proseCell(value || "None", 500)}`;
     lines.push("### What this PR changes", "");
     lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed), "");
   }

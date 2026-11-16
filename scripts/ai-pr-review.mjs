@@ -3,7 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { MISSING_RULES_NOTICE, renderReviewBreakdown, renderDependenciesAndFollowUps } from "./pr-intelligence/comment-layout.mjs";
+import { MISSING_RULES_NOTICE, renderGateLead, renderReviewBreakdown, renderDependenciesAndFollowUps } from "./pr-intelligence/comment-layout.mjs";
 import {
   attachReleaseNotes,
   buildUpgradeSuggestions,
@@ -327,6 +327,7 @@ export function renderStructuredReview(review, metadata, diagnostics, upgradeTab
 
 ${metadata.url ? `[Open pull request](${metadata.url})` : ""}
 
+${renderGateLead(review).join("\n")}
 ${renderReviewBreakdown(review, metadata)}
 ${renderDependenciesAndFollowUps(review, upgradeTable)}
 ## Verification
