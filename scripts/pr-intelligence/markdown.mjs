@@ -50,6 +50,33 @@ export function proseCell(value, maxCharacters = 500) {
   return compactProse(value, maxCharacters).replaceAll("|", "\\|");
 }
 
+/** Compact prose without cutting mid-sentence. Sentence boundary, or the full sentence up to a sane cap; never an ellipsis. */
+export function completeProse(value, maxCharacters = 500) {
+  const compact = redactSecretValues(value)
+    .replaceAll("@", "@\u200b")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!compact) return "";
+  if (compact.length <= maxCharacters) return compact;
+  const window = compact.slice(0, maxCharacters);
+  const ends = [...window.matchAll(/[.!?](?=\s|$)/g)];
+  const minKeep = Math.min(80, Math.floor(maxCharacters * 0.4));
+  if (ends.length) {
+    const end = ends[ends.length - 1].index + 1;
+    if (end >= minKeep) return compact.slice(0, end).trimEnd();
+  }
+  const first = compact.match(/^.+?[.!?](?=\s|$)/);
+  const sentence = (first ? first[0] : compact).trimEnd();
+  const hardCap = Math.max(maxCharacters * 2, 1000);
+  return sentence.length <= hardCap ? sentence : "";
+}
+
+export function completeProseCell(value, maxCharacters = 500) {
+  return completeProse(value, maxCharacters).replaceAll("|", "\\|");
+}
+
 export function areaStatus(status, { failOnAreaFail = true } = {}) {
   if (status === "fail" && failOnAreaFail !== false) return "❌ Fail (blocks gate)";
   return {

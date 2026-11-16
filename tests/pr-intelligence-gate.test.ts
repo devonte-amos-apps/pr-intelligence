@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -18,7 +19,11 @@ import {
   suggestRelease,
   severityStatus,
 } from "../scripts/pr-intelligence/gate.mjs"
-import { compactProse } from "../scripts/pr-intelligence/markdown.mjs"
+import { compactProse, completeProse } from "../scripts/pr-intelligence/markdown.mjs"
+
+const drip84ChangedFiles = readFileSync("tests/fixtures/drip-84-changed-files.txt", "utf8")
+const drip84Diff = readFileSync("tests/fixtures/drip-84.diff", "utf8")
+const withDrip84Diff = { changedFiles: drip84ChangedFiles, diffText: drip84Diff }
 
 const audit = (high = 0, critical = 0, vulnerabilities = {}) =>
   JSON.stringify({ vulnerabilities, metadata: { vulnerabilities: { info: 0, low: 1, moderate: 2, high, critical } } })
@@ -370,7 +375,7 @@ describe("renderGateSummary layout", () => {
       dependencies: [],
       followUps: [],
     }
-    const text = renderGateSummary(evaluateGate({ ...base, riskText: JSON.stringify(review) }))
+    const text = renderGateSummary(evaluateGate({ ...base, ...withDrip84Diff, riskText: JSON.stringify(review) }))
     expect(text).toMatch(/^## PR intelligence gate: ✅ passed/m)
     const heading = text.indexOf("## PR intelligence gate: ✅ passed")
     const summary = text.indexOf("### Summary")
@@ -385,10 +390,14 @@ describe("renderGateSummary layout", () => {
     expect(breakdown).toBeGreaterThan(table)
     expect(text.split("### What this PR changes").length - 1).toBe(1)
     expect(text.slice(breakdown)).not.toContain("### What this PR changes")
-    expect(text).toContain("**Added:** lowestBalanceFrom and invariant tests.")
-    expect(text).toContain("**Refactored:** applyWithdraw now checks the historical low.")
+    expect(text).toContain("`lowestBalanceFrom` in `lib/maths.ts`")
+    expect(text).toContain("lowestBalanceFrom and invariant tests.")
+    expect(text).toContain("`applyWithdraw` in `lib/maths.ts`")
+    expect(text).toContain("applyWithdraw now checks the historical low.")
+    expect(text).toContain("**Tests:** `tests/gaps.test.ts`")
+    expect(text).not.toMatch(/\*\*Refactored:\*\*.*`tests\/gaps\.test\.ts`/)
     expect(text).toContain("**Removed:** None")
-    expect(renderApprovalComment(evaluateGate({ ...base, riskText: JSON.stringify(review) }))).toBe(
+    expect(renderApprovalComment(evaluateGate({ ...base, ...withDrip84Diff, riskText: JSON.stringify(review) }))).toBe(
       "✅ PR intelligence: approved — severity clear, release: patch",
     )
   })
@@ -402,7 +411,7 @@ describe("renderGateSummary layout", () => {
         removed: "None",
       },
     }
-    const text = renderGateSummary(evaluateGate({ ...base, riskText: JSON.stringify(review) }))
+    const text = renderGateSummary(evaluateGate({ ...base, ...withDrip84Diff, riskText: JSON.stringify(review) }))
     expect(text).toMatch(/^## PR intelligence gate: ❌ failed/m)
     const heading = text.indexOf("## PR intelligence gate: ❌ failed")
     const summary = text.indexOf("### Summary")
@@ -423,6 +432,7 @@ describe("renderGateSummary layout", () => {
     const refactored = "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update."
     const text = renderGateSummary(evaluateGate({
       ...base,
+      ...withDrip84Diff,
       riskText: JSON.stringify({
         risk: "low",
         summary: "This PR introduces a new lowestBalanceFrom function to lib/maths.ts and integrates it into applyWithdraw to prevent back-dated withdrawals from causing negative balances at any point in the account's history up to the next manual balance update. New tests validate this behavior.",
@@ -435,10 +445,15 @@ describe("renderGateSummary layout", () => {
     }))
     expect(text).toContain("### Summary")
     expect(text).toContain("New tests validate this behavior.")
-    expect(text).toContain(added)
+    expect(text).toContain("`lowestBalanceFrom` in `lib/maths.ts`")
+    expect(text).toContain("A new function lowestBalanceFrom was added to lib/maths.ts to calculate the lowest running balance from a given date until the next manual balance update.")
+    expect(text).toContain("`applyWithdraw` in `lib/maths.ts`")
     expect(text).toContain(refactored)
+    expect(text).toContain("**Tests:** `tests/gaps.test.ts`")
+    expect(text).not.toContain("…")
     expect(text).not.toMatch(/added to…/)
     expect(text).not.toMatch(/next manual b…/)
+    expect(text).not.toMatch(/lead to a…/)
   })
 })
 
@@ -483,5 +498,22 @@ describe("compactProse", () => {
     expect(text.startsWith(kept)).toBe(true)
     expect(text[kept.length]).toBe(" ")
     expect(result.length).toBeLessThanOrEqual(241)
+  })
+})
+
+describe("completeProse", () => {
+  it("keeps a single long sentence intact instead of cutting it with an ellipsis", () => {
+    const sentence = "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update."
+    expect(sentence.length).toBeGreaterThan(160)
+    expect(completeProse(sentence, 160)).toBe(sentence)
+    expect(completeProse(sentence, 160)).not.toContain("…")
+    expect(completeProse(sentence, 500)).toBe(sentence)
+  })
+
+  it("cuts at the last complete sentence when more than one sentence exceeds the limit", () => {
+    const first = "A new function lowestBalanceFrom was added to lib/maths.ts to calculate the lowest running balance from a given date until the next manual balance update."
+    const second = "New unit tests for back-dated withdrawals and ARCH-004 invariants were added to tests/gaps.test.ts."
+    expect(completeProse(`${first} ${second}`, 240)).toBe(first)
+    expect(completeProse(`${first} ${second}`, 240)).not.toContain("…")
   })
 })

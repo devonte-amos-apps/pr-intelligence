@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
 
 import { MISSING_RULES_NOTICE } from "../scripts/pr-intelligence/comment-layout.mjs"
@@ -200,6 +201,9 @@ describe("PR-focused review prompt", () => {
   })
 })
 
+const drip84ChangedFiles = readFileSync("tests/fixtures/drip-84-changed-files.txt", "utf8")
+const drip84Diff = readFileSync("tests/fixtures/drip-84.diff", "utf8")
+
 describe("PR-focused comment layout", () => {
   it("leads with what this PR changes, then risk, then findings", () => {
     const review = parseStructuredReview(
@@ -218,6 +222,8 @@ describe("PR-focused comment layout", () => {
         architectureNotes: ["ARCH-004 is relevant to the withdrawal invariant."],
       }),
     )
+    review.changedFiles = drip84ChangedFiles
+    review.diff = drip84Diff
     const markdown = renderStructuredReview(review, { title: "Reject back-dated withdrawals", number: "84" }, {})
     const summary = markdown.indexOf("### Summary")
     const what = markdown.indexOf("### What this PR changes")
@@ -231,9 +237,13 @@ describe("PR-focused comment layout", () => {
     expect(risk).toBeGreaterThan(breakdown)
     expect(findings).toBeGreaterThan(risk)
     expect(markdown.split("### What this PR changes").length - 1).toBe(1)
-    expect(markdown).toContain("**Added:** Invariant tests for lowestBalanceFrom boundaries.")
-    expect(markdown).toContain("**Refactored:** applyWithdraw now caps against the historical low.")
+    expect(markdown).toContain("`lowestBalanceFrom` in `lib/maths.ts`")
+    expect(markdown).toContain("Invariant tests for lowestBalanceFrom boundaries.")
+    expect(markdown).toContain("`applyWithdraw` in `lib/maths.ts`")
+    expect(markdown).toContain("applyWithdraw now caps against the historical low.")
+    expect(markdown).toContain("**Tests:** `tests/gaps.test.ts`")
     expect(markdown).toContain("**Removed:** None")
+    expect(markdown).not.toMatch(/\*\*Refactored:\*\*.*`tests\/gaps\.test\.ts`/)
     expect(markdown).toContain("### Architecture notes")
     expect(markdown).toContain("ARCH-004 is relevant to the withdrawal invariant.")
   })

@@ -4,6 +4,7 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import { MISSING_RULES_NOTICE, renderGateLead, renderReviewBreakdown, renderDependenciesAndFollowUps } from "./pr-intelligence/comment-layout.mjs";
+import { deriveChangesFromDiff, filterFollowUps } from "./pr-intelligence/changes-from-diff.mjs";
 import {
   attachReleaseNotes,
   buildUpgradeSuggestions,
@@ -323,13 +324,19 @@ Return only the requested structured data. Fill changes.added, changes.refactore
 }
 
 export function renderStructuredReview(review, metadata, diagnostics, upgradeTable = "") {
+  const derived = review.derivedChanges || deriveChangesFromDiff({
+    changedFiles: review.changedFiles || "",
+    diff: review.diff || "",
+    review,
+  });
+  const withDerived = { ...review, derivedChanges: derived };
   return `# PR Architecture Intelligence
 
 ${metadata.url ? `[Open pull request](${metadata.url})` : ""}
 
-${renderGateLead(review).join("\n")}
-${renderReviewBreakdown(review, metadata)}
-${renderDependenciesAndFollowUps(review, upgradeTable)}
+${renderGateLead(withDerived, derived).join("\n")}
+${renderReviewBreakdown(withDerived, metadata)}
+${renderDependenciesAndFollowUps(withDerived, upgradeTable, { diff: review.diff || "", changedFiles: review.changedFiles || "" })}
 ## Verification
 
 | Check | Result |
@@ -526,6 +533,8 @@ export async function main({ cwd = process.cwd(), createClient = defaultCreateCl
     const review = parseStructuredReview(responseText);
     review.rulesFound = rulesResult.found;
     if (!rulesResult.found) review.rulesNotice = MISSING_RULES_NOTICE;
+    review.derivedChanges = deriveChangesFromDiff({ changedFiles, diff, review });
+    review.followUps = filterFollowUps(review.followUps, { diff, changedFiles });
     await fs.writeFile(outputPath, renderStructuredReview(review, metadata, diagnostics, upgradeTable));
     await writeReviewResult({ ...review, metadata });
   } catch (error) {
