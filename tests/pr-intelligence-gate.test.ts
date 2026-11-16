@@ -362,6 +362,7 @@ describe("suggestRelease and severity status", () => {
     expect(suggestRelease({ title: "feat: add payout calendar" }).level).toBe("minor")
     expect(suggestRelease({ title: "feat!: switch ledger format" }).level).toBe("major")
     expect(suggestRelease({ title: "Update maths", body: "BREAKING CHANGE: new shape" }).level).toBe("major")
+    expect(suggestRelease({ title: "Reject back-dated withdrawals", body: "- [x] **No breaking DB migrations**\n- [x] **API Contract:** No breaking changes." }).level).toBe("patch")
     expect(suggestRelease({ title: "Bump Zod", labels: ["semver:minor"] }).level).toBe("minor")
     expect(suggestRelease({ title: "Reject back-dated withdrawals", headRef: "fix/80-backdated-withdrawal" }).level).toBe("patch")
     expect(suggestRelease({ title: "Docs only", changedFiles: "M\tdocs/README.md\nM\tAGENTS.md" }).level).toBe("patch")

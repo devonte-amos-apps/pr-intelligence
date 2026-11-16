@@ -127,7 +127,7 @@ export function suggestRelease({ title = "", body = "", labels = [], changedFile
   const type = conventional ? conventional[1].toLowerCase() : "";
   const breakingConvention = Boolean(conventional?.[2]);
   const breakingLabel = labelNames.some((name) => ["breaking", "breaking-change", "semver:major", "major"].includes(name));
-  const breakingText = /BREAKING[- ]CHANGE/i.test(text) || /\bbreaking change\b/i.test(text);
+  const breakingText = /(?:^|\n)\s*BREAKING[- ]CHANGE:\s*\S/i.test(text);
 
   if (breakingLabel || breakingConvention || breakingText) {
     return { level: "major", reason: "Breaking-change label, conventional `!`, or a BREAKING CHANGE note." };
