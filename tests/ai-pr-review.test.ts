@@ -74,11 +74,38 @@ describe("PR architecture review failures", () => {
       { tests: { output: "pass", exitCode: "0" } },
     )
 
-    expect(markdown).toContain("| **HIGH** | Dependency updates are required before merge. |")
+    expect(markdown).toContain("| HIGH | Dependency updates are required before merge. |")
     expect(markdown).toContain("| Dependencies | ⚠️ Warn | npm audit failed |")
     expect(markdown).toContain("| — | — | — | No material architecture findings. |")
     expect(markdown).toContain("| high | next | Known security advisories |")
     expect(markdown).toContain("- [ ] Upgrade Next.js")
+    expect(markdown).toContain("## PR review breakdown")
+  })
+
+  it("marks architecture findings as advisory, not gate-blocking", () => {
+    const review = parseStructuredReview(
+      JSON.stringify({
+        risk: "high",
+        summary: "Balance invariants changed.",
+        areas: [{ area: "Data Integrity", status: "pass", evidence: "lib/maths.ts" }],
+        findings: [
+          {
+            severity: "high",
+            ruleId: "ARCH-004",
+            evidence: ["lib/maths.ts"],
+            impact: "Prevents account balances from going negative due to back-dated withdrawals.",
+            recommendation: "Confirm lowestBalanceFrom enforces balance invariants across manual-update boundaries.",
+          },
+        ],
+        dependencies: [],
+        followUps: [],
+      }),
+    )
+    const markdown = renderStructuredReview(review, { title: "Reject back-dated withdrawals", number: "84", url: "https://github.com/devcamos/drip/pull/84" }, {})
+    expect(markdown).toContain("high (advisory)")
+    expect(markdown).not.toContain("blocks gate")
+    expect(markdown).toContain("ARCH-004")
+    expect(markdown).toContain("[Reject back-dated withdrawals](https://github.com/devcamos/drip/pull/84)")
   })
 
   it("rejects invalid structured responses", () => {

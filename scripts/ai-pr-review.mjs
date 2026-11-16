@@ -3,6 +3,7 @@ import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { renderReviewBreakdown, renderDependenciesAndFollowUps } from "./pr-intelligence/comment-layout.mjs";
 import {
   attachReleaseNotes,
   buildUpgradeSuggestions,
@@ -10,6 +11,9 @@ import {
   renderUpgradeTable,
   upgradesForPrompt,
 } from "./pr-intelligence/dependency-upgrades.mjs";
+import { redactSecrets } from "./pr-intelligence/markdown.mjs";
+
+export { redactSecrets };
 
 let inputDirectory = path.resolve(".pr-architecture");
 let outputPath = path.resolve("pr-review.md");
@@ -73,12 +77,6 @@ const reviewSchema = {
     followUps: { type: "array", maxItems: 3, items: { type: "string" } },
   },
 };
-
-export function redactSecrets(value, apiKey = process.env.GEMINI_API_KEY) {
-  let result = String(value || "Unknown error");
-  if (apiKey) result = result.replaceAll(apiKey, "[redacted Gemini API key]");
-  return result.replace(/\bAIza[A-Za-z0-9_-]{20,}/g, "[redacted Gemini API key]");
-}
 
 export function describeGeminiError(error, model = process.env.GEMINI_MODEL || defaultModel) {
   const status = Number(error?.status);
@@ -191,31 +189,6 @@ function diagnosticsTable(diagnostics) {
     .join("\n");
 }
 
-function compactText(value, maxCharacters = 240) {
-  const compact = redactSecrets(value)
-    .replaceAll("@", "@\u200b")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/\s+/g, " ")
-    .trim();
-  return compact.length <= maxCharacters
-    ? compact
-    : `${compact.slice(0, maxCharacters - 1).trimEnd()}…`;
-}
-
-function tableCell(value, maxCharacters) {
-  return compactText(value, maxCharacters).replaceAll("|", "\\|");
-}
-
-function areaStatus(status) {
-  return {
-    pass: "✅ Pass",
-    warn: "⚠️ Warn",
-    fail: "❌ Fail",
-    not_applicable: "➖ N/A",
-  }[status] || "➖ Unknown";
-}
-
 export function parseStructuredReview(text) {
   const review = JSON.parse(text);
   if (!review || typeof review !== "object" || !riskLevels.has(review.risk)) {
@@ -233,78 +206,17 @@ export function parseStructuredReview(text) {
 }
 
 export function renderStructuredReview(review, metadata, diagnostics, upgradeTable = "") {
-  const areas = review.areas.length
-    ? review.areas
-        .slice(0, 6)
-        .map(
-          (area) =>
-            `| ${tableCell(area.area, 60)} | ${areaStatus(area.status)} | ${tableCell(area.evidence, 180)} |`,
-        )
-        .join("\n")
-    : "| Overall architecture | ➖ N/A | No areas were returned. |";
-
-  const findings = review.findings.length
-    ? review.findings
-        .slice(0, 5)
-        .map((finding) => {
-          const evidence = Array.isArray(finding.evidence) ? finding.evidence.join(", ") : "Not supplied";
-          const action = `${finding.impact} Action: ${finding.recommendation}`;
-          return `| ${tableCell(finding.severity, 12)} | ${tableCell(finding.ruleId, 24)} | ${tableCell(evidence, 140)} | ${tableCell(action, 240)} |`;
-        })
-        .join("\n")
-    : "| — | — | — | No material architecture findings. |";
-
-  const dependencies = review.dependencies.length
-    ? review.dependencies
-        .slice(0, 5)
-        .map(
-          (dependency) =>
-            `| ${tableCell(dependency.severity, 12)} | ${tableCell(dependency.package, 40)} | ${tableCell(dependency.issue, 180)} | ${tableCell(dependency.recommendation, 180)} |`,
-        )
-        .join("\n")
-    : "| — | — | No material dependency findings. | — |";
-
-  const followUps = review.followUps.length
-    ? review.followUps.slice(0, 3).map((item) => `- [ ] ${compactText(item, 180)}`).join("\n")
-    : "- [x] No additional follow-up requested.";
-
   return `# PR Architecture Intelligence
 
 ${metadata.url ? `[Open pull request](${metadata.url})` : ""}
 
-## Overview
-
-| Risk | Summary |
-| --- | --- |
-| **${tableCell(review.risk.toUpperCase(), 12)}** | ${tableCell(review.summary, 360)} |
-
-## Areas
-
-| Area | Status | Evidence |
-| --- | --- | --- |
-${areas}
-
-## Architecture findings
-
-| Severity | Rule | Evidence | Impact and action |
-| --- | --- | --- | --- |
-${findings}
-
-## Dependency and security findings
-
-| Severity | Package | Issue | Recommendation |
-| --- | --- | --- | --- |
-${dependencies}
-
-${upgradeTable ? `${upgradeTable}\n` : ""}## Verification
+${renderReviewBreakdown(review, metadata)}
+${renderDependenciesAndFollowUps(review, upgradeTable)}
+## Verification
 
 | Check | Result |
 | --- | --- |
 ${diagnosticsTable(diagnostics)}
-
-## Follow-ups
-
-${followUps}
 `;
 }
 
@@ -339,11 +251,22 @@ function escapeWorkflowCommand(value) {
   return value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
 }
 
+
+async function writeReviewResult(payload) {
+  try {
+    await fs.mkdir(inputDirectory, { recursive: true });
+    await fs.writeFile(path.join(inputDirectory, "review-result.json"), JSON.stringify(payload));
+  } catch (error) {
+    process.stderr.write(`Could not write review-result.json: ${redactSecrets(error?.message || error)}\n`);
+  }
+}
+
 async function reportFailure(reason, recovery, metadata, diagnostics, upgradeTable = "") {
   const safeReason = redactSecrets(reason);
   const safeRecovery = redactSecrets(recovery);
   const review = fallbackReview(safeReason, safeRecovery, metadata, diagnostics, upgradeTable);
   await fs.writeFile(outputPath, review);
+  await writeReviewResult({ risk: null, unavailable: true, reason: safeReason, recovery: safeRecovery, metadata });
   process.stderr.write(
     `::error title=PR Architecture Intelligence::${escapeWorkflowCommand(`${safeReason} ${safeRecovery}`)}\n`,
   );
@@ -378,6 +301,7 @@ export async function main({ cwd = process.cwd(), createClient = defaultCreateCl
     eventName: process.env.EVENT_NAME,
     commitSha: process.env.COMMIT_SHA,
     commitUrl: process.env.COMMIT_URL,
+    body: (process.env.PR_BODY || "").slice(0, 4_000),
   };
 
   let inputs;
@@ -502,7 +426,7 @@ Return only the requested structured data. Keep the summary under 40 words and e
     if (!responseText) throw new Error("Gemini returned an empty review");
     const review = parseStructuredReview(responseText);
     await fs.writeFile(outputPath, renderStructuredReview(review, metadata, diagnostics, upgradeTable));
-    await fs.writeFile(path.join(inputDirectory, "review-result.json"), JSON.stringify({ risk: review.risk }));
+    await writeReviewResult({ ...review, metadata });
   } catch (error) {
     const { reason, recovery } = describeGeminiError(error);
     await reportFailure(reason, recovery, metadata, diagnostics, upgradeTable);
