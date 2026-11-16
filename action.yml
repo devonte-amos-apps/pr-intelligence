@@ -2,7 +2,7 @@ name: PR Architecture Intelligence review
 description: Generates the AI architecture review and dependency upgrade suggestions from collected diagnostics.
 inputs:
   rules-path:
-    description: Path to the caller's rules JSON file.
+    description: Optional path to the caller's rules JSON file. If missing, the review is PR-focused only.
     default: architecture-rules.json
 runs:
   using: composite

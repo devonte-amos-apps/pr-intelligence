@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest"
 
+import { MISSING_RULES_NOTICE } from "../scripts/pr-intelligence/comment-layout.mjs"
 import {
+  buildReviewPrompt,
   describeGeminiError,
   fallbackReview,
   isRetryableGeminiError,
   parseStructuredReview,
   redactSecrets,
   renderStructuredReview,
+  reviewSystemInstruction,
 } from "../scripts/ai-pr-review.mjs"
 
 describe("PR architecture review failures", () => {
@@ -76,7 +79,7 @@ describe("PR architecture review failures", () => {
 
     expect(markdown).toContain("| HIGH | Dependency updates are required before merge. |")
     expect(markdown).toContain("| Dependencies | ⚠️ Warn | npm audit failed |")
-    expect(markdown).toContain("| — | — | — | No material architecture findings. |")
+    expect(markdown).toContain("| — | — | — | No material findings. |")
     expect(markdown).toContain("| high | next | Known security advisories |")
     expect(markdown).toContain("- [ ] Upgrade Next.js")
     expect(markdown).toContain("## PR review breakdown")
@@ -143,5 +146,103 @@ describe("PR architecture review failures", () => {
     const fallback = fallbackReview("no key", "add key", { number: "3", title: "T" }, {}, table)
     expect(fallback).toContain(table)
     expect(fallback).toContain("#3")
+  })
+})
+
+
+describe("PR-focused review prompt", () => {
+  const diagnostics = {
+    npmAudit: { output: "{}", exitCode: "0" },
+    npmLs: { output: "ok", exitCode: "0" },
+    tests: { output: "ok", exitCode: "0" },
+    build: { output: "ok", exitCode: "0" },
+    dependencyCruiser: { output: "skipped", exitCode: "0" },
+  }
+
+  it("instructs residual-risk rating and defect-based finding severity", () => {
+    const prompt = buildReviewPrompt({
+      rules: { project: "Demo", rules: [{ id: "ARCH-004", severity: "high", title: "Balances stay non-negative" }] },
+      rulesFound: true,
+      metadata: { number: "84", title: "fix: reject back-dated withdrawals" },
+      changedFiles: "M\tlib/maths.ts",
+      diff: "diff --git a/lib/maths.ts b/lib/maths.ts",
+      upgrades: [],
+      ...diagnostics,
+    })
+
+    expect(prompt).toContain("Focus on the diff itself, not the overall application")
+    expect(prompt).toContain("residual risk")
+    expect(prompt).toContain("not HIGH just because the area is important")
+    expect(prompt).toContain("Do not raise a finding to confirm correct behaviour")
+    expect(prompt).toContain("severity is a ceiling")
+    expect(prompt).toContain("enhanced feedback")
+    expect(prompt).toContain("they do not define the scope of this review")
+    expect(prompt).toContain("ARCH-004")
+    expect(reviewSystemInstruction({ project: "Demo" }, true)).toContain("residual risk")
+    expect(reviewSystemInstruction({ project: "Demo" }, true)).toContain("enhanced feedback")
+  })
+
+  it("uses a PR-focused rules-optional section when no rules file is present", () => {
+    const prompt = buildReviewPrompt({
+      rules: null,
+      rulesFound: false,
+      metadata: { number: "1", title: "fix typo" },
+      changedFiles: "M\tREADME.md",
+      diff: "diff --git a/README.md b/README.md",
+      upgrades: [],
+      ...diagnostics,
+    })
+
+    expect(prompt).toContain("No architecture rules file was provided")
+    expect(prompt).toContain("PR-focused review only")
+    expect(prompt).not.toContain("Architecture rules (enhanced feedback")
+    expect(reviewSystemInstruction(null, false)).toContain("If no rules are supplied")
+  })
+})
+
+describe("PR-focused comment layout", () => {
+  it("leads with what this PR changes, then risk, then findings", () => {
+    const review = parseStructuredReview(
+      JSON.stringify({
+        risk: "low",
+        summary: "Rejects oversized back-dated withdrawals.",
+        changes: {
+          added: "Invariant tests for lowestBalanceFrom boundaries.",
+          refactored: "applyWithdraw now caps against the historical low.",
+          removed: "None",
+        },
+        areas: [{ area: "Data Integrity", status: "pass", evidence: "lib/maths.ts" }],
+        findings: [],
+        dependencies: [],
+        followUps: [],
+        architectureNotes: ["ARCH-004 is relevant to the withdrawal invariant."],
+      }),
+    )
+    const markdown = renderStructuredReview(review, { title: "Reject back-dated withdrawals", number: "84" }, {})
+    const what = markdown.indexOf("### What this PR changes")
+    const risk = markdown.indexOf("### Risk")
+    const findings = markdown.indexOf("### Findings")
+    expect(what).toBeGreaterThan(-1)
+    expect(risk).toBeGreaterThan(what)
+    expect(findings).toBeGreaterThan(risk)
+    expect(markdown).toContain("**Added:** Invariant tests for lowestBalanceFrom boundaries.")
+    expect(markdown).toContain("**Refactored:** applyWithdraw now caps against the historical low.")
+    expect(markdown).toContain("**Removed:** None")
+    expect(markdown).toContain("### Architecture notes")
+    expect(markdown).toContain("ARCH-004 is relevant to the withdrawal invariant.")
+  })
+
+  it("shows the missing-rules notice in the comment", () => {
+    const review = {
+      risk: "low",
+      summary: "Docs typo only.",
+      areas: [],
+      findings: [],
+      dependencies: [],
+      followUps: [],
+      rulesFound: false,
+    }
+    const markdown = renderStructuredReview(review, {}, {})
+    expect(markdown).toContain(MISSING_RULES_NOTICE)
   })
 })
