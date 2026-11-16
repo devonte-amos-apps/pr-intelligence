@@ -2,7 +2,7 @@
 // Prefer added/modified/removed top-level or exported functions and classes in
 // TS/JS/MJS files; fall back to file-level added/modified/removed/renamed.
 
-import { compactProse } from "./markdown.mjs";
+import { completeProse } from "./markdown.mjs";
 
 const JS_FILE = /\.(m?[jt]sx?)$/i;
 const WORKFLOW_FILE = /^\.github\/workflows\/.+\.ya?ml$/i;
@@ -19,6 +19,35 @@ const NON_V1_PIN =
 
 function normalizePath(value) {
   return String(value || "").replace(/\\/g, "/").trim();
+}
+
+export function isTestPath(path) {
+  const normalised = normalizePath(path);
+  if (normalised === "tests" || normalised.startsWith("tests/")) return true;
+  const base = normalised.split("/").pop() || "";
+  return /\.(?:test|spec)\.[^.]+$/i.test(base);
+}
+
+function partitionTests(items) {
+  const tests = [];
+  const rest = [];
+  for (const entry of items || []) {
+    if (isTestPath(entry.path) || isTestPath(entry.from || "")) tests.push(entry);
+    else rest.push(entry);
+  }
+  return { tests, rest };
+}
+
+function withTests(changes) {
+  const tests = [];
+  const next = { ...changes };
+  for (const key of ["added", "modified", "removed", "renamed"]) {
+    const { tests: moved, rest } = partitionTests(changes[key]);
+    tests.push(...moved);
+    next[key] = rest;
+  }
+  next.tests = tests;
+  return next;
 }
 
 function declarationName(line) {
@@ -126,7 +155,7 @@ function sentenceMentioning(text, name) {
   if (!pattern.test(compact)) return "";
   const sentences = compact.split(/(?<=[.!?])\s+/);
   const hit = sentences.find((sentence) => pattern.test(sentence)) || compact;
-  return compactProse(hit, 160);
+  return completeProse(hit, 500);
 }
 
 function descriptionsFromReview(review) {
@@ -195,13 +224,13 @@ export function deriveChangesFromDiff({ changedFiles = "", diff = "", review = n
 
   const anySymbols = added.length + modified.length + removed.length > 0;
   if (!anySymbols) {
-    return {
+    return withTests({
       kind: "files",
       added: files.filter((file) => file.status === "A").map((file) => ({ path: file.path })),
       modified: files.filter((file) => file.status === "M").map((file) => ({ path: file.path })),
       removed: files.filter((file) => file.status === "D").map((file) => ({ path: file.path })),
       renamed: files.filter((file) => file.status === "R").map((file) => ({ from: file.from, path: file.path })),
-    };
+    });
   }
 
   for (const file of filesWithoutSymbols) {
@@ -210,7 +239,7 @@ export function deriveChangesFromDiff({ changedFiles = "", diff = "", review = n
     else if (file.status === "M") modified.push({ name: "", path: file.path, description: describe("", file.path, "modified", review) });
   }
 
-  return { kind: "symbols", added, modified, removed, renamed };
+  return withTests({ kind: "symbols", added, modified, removed, renamed });
 }
 
 function newFileLines(diff, path) {

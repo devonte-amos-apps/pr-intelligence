@@ -3,7 +3,7 @@
 
 import { filterFollowUps } from "./changes-from-diff.mjs";
 import { GATE_POLICY, findingList } from "./gate-policy.mjs";
-import { areaStatus, findingSeverityLabel, firstParagraph, proseCell, tableCell, trustedCell } from "./markdown.mjs";
+import { areaStatus, completeProseCell, findingSeverityLabel, firstParagraph, proseCell, tableCell, trustedCell } from "./markdown.mjs";
 
 export const MISSING_RULES_NOTICE = "No architecture rules file found — PR-focused review only";
 
@@ -237,7 +237,7 @@ function formatChangeItems(items, label) {
   const parts = items.map((entry) => {
     if (entry.from && entry.path) return `\`${entry.from}\` → \`${entry.path}\``;
     const target = entry.name ? `\`${entry.name}\` in \`${entry.path}\`` : `\`${entry.path}\``;
-    const description = entry.description ? ` — ${proseCell(entry.description, 160)}` : "";
+    const description = entry.description ? ` — ${completeProseCell(entry.description, 500)}` : "";
     return `${target}${description}`;
   });
   return `- **${label}:** ${parts.join("; ")}`;
@@ -245,12 +245,13 @@ function formatChangeItems(items, label) {
 
 export function renderChangeList(changes) {
   if (!changes) return [];
-  const hasItems = ["added", "modified", "removed", "renamed"].some((key) => changes[key]?.length);
+  const hasItems = ["added", "modified", "removed", "renamed", "tests"].some((key) => changes[key]?.length);
   if (!hasItems) return [];
   const lines = ["### What this PR changes", ""];
   lines.push(formatChangeItems(changes.added, "Added"));
   lines.push(formatChangeItems(changes.modified, "Refactored"));
   lines.push(formatChangeItems(changes.removed, "Removed"));
+  if (changes.tests?.length) lines.push(formatChangeItems(changes.tests, "Tests"));
   if (changes.renamed?.length) lines.push(formatChangeItems(changes.renamed, "Renamed"));
   lines.push("");
   return lines;

@@ -17,7 +17,7 @@ const review = {
   summary: "This PR introduces a new lowestBalanceFrom function to lib/maths.ts and integrates it into applyWithdraw. New tests validate this behavior.",
   changes: {
     added: "A new function lowestBalanceFrom was added to lib/maths.ts to calculate the lowest running balance from a given date until the next manual balance update. New unit tests for back-dated withdrawals and ARCH-004 invariants were added to tests/gaps.test.ts.",
-    refactored: "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function.",
+    refactored: "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update.",
     removed: "None",
   },
   followUps: [
@@ -105,8 +105,10 @@ describe("deriveChangesFromDiff", () => {
       expect.objectContaining({
         name: "applyWithdraw",
         path: "lib/maths.ts",
-        description: expect.stringContaining("applyWithdraw function"),
+        description: "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update.",
       }),
+    ])
+    expect(changes.tests).toEqual([
       expect.objectContaining({
         name: "",
         path: "tests/gaps.test.ts",
@@ -114,6 +116,7 @@ describe("deriveChangesFromDiff", () => {
       }),
     ])
     expect(changes.removed).toEqual([])
+    expect(changes.modified.map((item) => item.description).join(" ")).not.toContain("…")
   })
 
   it("does not attach an AI sentence that does not mention the symbol", () => {
@@ -135,7 +138,21 @@ describe("deriveChangesFromDiff", () => {
       modified: [{ path: "README.md" }],
       removed: [{ path: "old.txt" }],
       renamed: [{ from: "src/a.ts", path: "src/b.ts" }],
+      tests: [],
     })
+  })
+
+  it("lists test paths on Tests, including *.test.* and *.spec.* outside tests/", () => {
+    const files = "M\tlib/maths.ts\nM\ttests/gaps.test.ts\nA\tsrc/foo.test.ts\nM\tapp.spec.tsx\n"
+    const changes = deriveChangesFromDiff({ changedFiles: files, diff: "" })
+    expect(changes.modified).toEqual([{ path: "lib/maths.ts" }])
+    expect(changes.added).toEqual([])
+    expect(changes.tests).toHaveLength(3)
+    expect(changes.tests).toEqual(expect.arrayContaining([
+      { path: "tests/gaps.test.ts" },
+      { path: "src/foo.test.ts" },
+      { path: "app.spec.tsx" },
+    ]))
   })
 })
 
@@ -175,10 +192,12 @@ describe("renderGateLead from a derived change list", () => {
     expect(text).toContain("### What this PR changes")
     expect(text).toContain("`lowestBalanceFrom` in `lib/maths.ts`")
     expect(text).toContain("`applyWithdraw` in `lib/maths.ts`")
-    expect(text).toContain("`tests/gaps.test.ts`")
+    expect(text).toContain("**Tests:** `tests/gaps.test.ts`")
     expect(text).toContain("**Removed:** None")
     expect(text).toContain("lowestBalanceFrom was added")
-    expect(text).toContain("applyWithdraw function")
+    expect(text).toContain("The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update.")
+    expect(text).not.toContain("…")
+    expect(text).not.toMatch(/\*\*Refactored:\*\*.*`tests\/gaps\.test\.ts`/)
     expect(text).not.toContain("runningBalancesUntilNextSet")
     expect(text).not.toContain("applyTopUp")
   })

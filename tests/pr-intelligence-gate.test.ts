@@ -19,7 +19,7 @@ import {
   suggestRelease,
   severityStatus,
 } from "../scripts/pr-intelligence/gate.mjs"
-import { compactProse } from "../scripts/pr-intelligence/markdown.mjs"
+import { compactProse, completeProse } from "../scripts/pr-intelligence/markdown.mjs"
 
 const drip84ChangedFiles = readFileSync("tests/fixtures/drip-84-changed-files.txt", "utf8")
 const drip84Diff = readFileSync("tests/fixtures/drip-84.diff", "utf8")
@@ -394,7 +394,8 @@ describe("renderGateSummary layout", () => {
     expect(text).toContain("lowestBalanceFrom and invariant tests.")
     expect(text).toContain("`applyWithdraw` in `lib/maths.ts`")
     expect(text).toContain("applyWithdraw now checks the historical low.")
-    expect(text).toContain("`tests/gaps.test.ts`")
+    expect(text).toContain("**Tests:** `tests/gaps.test.ts`")
+    expect(text).not.toMatch(/\*\*Refactored:\*\*.*`tests\/gaps\.test\.ts`/)
     expect(text).toContain("**Removed:** None")
     expect(renderApprovalComment(evaluateGate({ ...base, ...withDrip84Diff, riskText: JSON.stringify(review) }))).toBe(
       "✅ PR intelligence: approved — severity clear, release: patch",
@@ -447,10 +448,12 @@ describe("renderGateSummary layout", () => {
     expect(text).toContain("`lowestBalanceFrom` in `lib/maths.ts`")
     expect(text).toContain("A new function lowestBalanceFrom was added to lib/maths.ts to calculate the lowest running balance from a given date until the next manual balance update.")
     expect(text).toContain("`applyWithdraw` in `lib/maths.ts`")
-    expect(text).toContain("The applyWithdraw function in lib/maths.ts was updated")
-    expect(text).toContain("`tests/gaps.test.ts`")
+    expect(text).toContain(refactored)
+    expect(text).toContain("**Tests:** `tests/gaps.test.ts`")
+    expect(text).not.toContain("…")
     expect(text).not.toMatch(/added to…/)
     expect(text).not.toMatch(/next manual b…/)
+    expect(text).not.toMatch(/lead to a…/)
   })
 })
 
@@ -495,5 +498,22 @@ describe("compactProse", () => {
     expect(text.startsWith(kept)).toBe(true)
     expect(text[kept.length]).toBe(" ")
     expect(result.length).toBeLessThanOrEqual(241)
+  })
+})
+
+describe("completeProse", () => {
+  it("keeps a single long sentence intact instead of cutting it with an ellipsis", () => {
+    const sentence = "The applyWithdraw function in lib/maths.ts was updated to use the new lowestBalanceFrom function, adding a check to reject withdrawals that would lead to a negative balance on their date or any subsequent date until the next manual balance update."
+    expect(sentence.length).toBeGreaterThan(160)
+    expect(completeProse(sentence, 160)).toBe(sentence)
+    expect(completeProse(sentence, 160)).not.toContain("…")
+    expect(completeProse(sentence, 500)).toBe(sentence)
+  })
+
+  it("cuts at the last complete sentence when more than one sentence exceeds the limit", () => {
+    const first = "A new function lowestBalanceFrom was added to lib/maths.ts to calculate the lowest running balance from a given date until the next manual balance update."
+    const second = "New unit tests for back-dated withdrawals and ARCH-004 invariants were added to tests/gaps.test.ts."
+    expect(completeProse(`${first} ${second}`, 240)).toBe(first)
+    expect(completeProse(`${first} ${second}`, 240)).not.toContain("…")
   })
 })
