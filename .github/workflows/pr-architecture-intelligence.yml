@@ -2,13 +2,13 @@ name: PR Architecture Intelligence
 
 # Shared, reusable PR review. Call it from any repository:
 #   uses: devonte-amos-apps/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
-# Repository-specific principles and rules live in the caller's rules file.
+# Architecture rules in the caller's rules file are optional enhanced feedback; the review focuses on the PR diff.
 
 on:
   workflow_call:
     inputs:
       rules-path:
-        description: Path to the caller's architecture rules JSON file.
+        description: Optional path to the caller's architecture rules JSON. If the file is missing, the review is PR-focused only.
         type: string
         default: architecture-rules.json
       node-version:

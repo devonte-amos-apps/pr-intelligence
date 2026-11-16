@@ -2,13 +2,13 @@
 
 Shared, reusable PR Architecture Intelligence review for personal and project repositories.
 
-Each run collects the diff, `npm audit`, `npm ls`, tests, build and optional dependency-cruiser output, asks Gemini for a structured review against the **caller's own rules file**, and posts a sticky PR comment. It also adds a **Dependency upgrade suggestions** table for every direct (level-0) dependency: installed vs latest stable, patch/minor/major, with key-framework majors (React, Next.js, TypeScript, Prisma, Vitest, …) flagged and linked to release notes. The table is rendered even when Gemini is unavailable.
+Each run collects the diff, `npm audit`, `npm ls`, tests, build and optional dependency-cruiser output, asks Gemini for a structured, PR-focused review of the diff (architecture rules are optional enhanced feedback), and posts a sticky PR comment. It also adds a **Dependency upgrade suggestions** table for every direct (level-0) dependency: installed vs latest stable, patch/minor/major, with key-framework majors (React, Next.js, TypeScript, Prisma, Vitest, …) flagged and linked to release notes. The table is rendered even when Gemini is unavailable.
 
 ## How it works
 
 Verification uses existing deterministic checks (`npm audit`, dependency-cruiser, and major-version detection) plus the thresholds in `GATE_POLICY` to decide whether the PR passes or fails.
 
-AI intelligence (Gemini, against each app's own ARCH rules) summarises the PR, explains the work, rates risk, and lists findings and areas. The AI risk rating and any high or critical findings also feed the gate — they can fail the PR when those checks are enabled, which is the default. A release suggestion (patch, minor, or major) comes from the conventional title, labels, or branch name, not from the model.
+AI intelligence (Gemini) focuses on the pull request itself: what was added, refactored, or removed; the intent and behaviour change; and the residual risk of this diff. A correct fix in an important area, with tests, is not rated HIGH just because the area is important. Architecture rules, when a rules file is present, are enhanced feedback (cited on findings and areas where relevant); they do not define the scope of the review. If no rules file is found, the comment notes that it is a PR-focused review only. The AI risk rating and any high or critical findings still feed the gate — they can fail the PR when those checks are enabled, which is the default. A release suggestion (patch, minor, or major) comes from the conventional title, labels, or branch name, not from the model.
 
 Results are posted as sticky PR comments. The action never merges the PR.
 
@@ -26,7 +26,7 @@ jobs:
   review:
     uses: devonte-amos-apps/pr-intelligence/.github/workflows/pr-architecture-intelligence.yml@v1
     with:
-      rules-path: architecture-rules.json   # repo-specific principles and rules
+      rules-path: architecture-rules.json   # optional; enhanced feedback if present
       node-version: "22"
       dependency-cruiser-dirs: src          # optional, space-separated
     secrets:
@@ -35,7 +35,7 @@ jobs:
 
 Inputs: `rules-path`, `node-version`, `dependency-cruiser-dirs`, `extra-env` (non-secret build placeholders), `gemini-model`, `fail-on-high`, `fail-on-majors` (default `true`), `fail-on-high-findings`, `fail-on-area-fail`, `tool-ref`. Secret: `GEMINI_API_KEY` (optional; without it the comment still shows diagnostics and upgrade suggestions).
 
-The rules file is JSON: `{ "project": "...", "reviewPrinciples": [...], "rules": [{ "id", "severity", "title", "description", "evidence" }] }`.
+The rules file is optional. When present it must be JSON: `{ "project": "...", "reviewPrinciples": [...], "rules": [{ "id", "severity", "title", "description", "evidence" }] }`. A missing file still runs a PR-focused review. Invalid JSON fails the review job.
 
 ## PR intelligence gate
 
@@ -51,7 +51,7 @@ The workflow runs a second job, **PR intelligence gate**, that passes or fails t
 | Review area with status Fail (`fail-on-area-fail`) | fail |
 | Major upgrades available (npm outdated) | warning |
 
-The gate writes a job summary and a sticky PR comment with a check table (`Check | Type | Outcome | Failure Trigger`), a data-derived **Why it failed** section, a **PR review breakdown**, a **Release suggestion** (semver patch/minor/major from the conventional title, labels, or branch name), a **Severity status** line (Clear when no high or critical blocking items remain), and a collapsible threshold matrix generated from the same policy object `evaluateGate` implements. High or critical findings are labelled **blocks gate**; medium and low stay **advisory**. After the gate runs, that comment is updated in place and consolidated with the architecture-review comment (markers `<!-- pr-intelligence-gate -->` and `<!-- pr-architecture-intelligence -->`) so reruns do not spam the thread.
+The gate writes a job summary and a sticky PR comment that, directly under the pass or fail heading, shows a short **PR logic** summary (what the code now does) and the **What this PR changes** list (added / refactored / removed), then the check table (`Check | Type | Outcome | Failure Trigger`), a data-derived **Why it failed** section, a **PR review breakdown** that also includes **What this PR changes**, then risk, then findings, a **Release suggestion** (semver patch/minor/major from the conventional title, labels, or branch name), a **Severity status** line (Clear when no high or critical blocking items remain), and a collapsible threshold matrix generated from the same policy object `evaluateGate` implements. High or critical findings are labelled **blocks gate**; medium and low stay **advisory**. After the gate runs, that comment is updated in place and consolidated with the architecture-review comment (markers `<!-- pr-intelligence-gate -->` and `<!-- pr-architecture-intelligence -->`) so reruns do not spam the thread.
 
 When the gate passes, a separate sticky comment (marker `<!-- pr-intelligence-approval -->`) is posted or updated: `✅ PR intelligence: approved — severity clear, release: patch`. If a later run fails, that comment is updated to a not-approved status so a stale approval cannot linger. This is a comment only — the action does not submit a GitHub review approval and never merges the PR.
 

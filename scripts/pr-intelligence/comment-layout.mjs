@@ -4,6 +4,8 @@
 import { GATE_POLICY, findingList } from "./gate-policy.mjs";
 import { areaStatus, findingSeverityLabel, firstParagraph, tableCell, trustedCell } from "./markdown.mjs";
 
+export const MISSING_RULES_NOTICE = "No architecture rules file found — PR-focused review only";
+
 export function formatPrSummary(review, metadata = {}) {
   const title = metadata.title || "";
   const number = metadata.number ? String(metadata.number) : "";
@@ -134,8 +136,31 @@ export function renderThresholdMatrix(result = {}) {
   return lines.join("\n");
 }
 
+function renderWhatChanged(review) {
+  const lines = ["### What this PR changes", ""];
+  const changes = review?.changes;
+  const hasChanges = changes && typeof changes === "object"
+    && (changes.added || changes.refactored || changes.removed);
+  if (hasChanges) {
+    const item = (label, value) => `- **${label}:** ${tableCell(value || "None", 240)}`;
+    lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed));
+  } else if (review && !review.unavailable && review.summary) {
+    lines.push(tableCell(review.summary, 400));
+  } else {
+    lines.push("No change summary was provided.");
+  }
+  lines.push("");
+  return lines;
+}
+
 export function renderReviewBreakdown(review, metadata = {}, options = {}) {
-  const lines = ["## PR review breakdown", "", "### Summary & Risk", "", "| Risk | PR Summary |", "| --- | --- |"];
+  const lines = ["## PR review breakdown", ""];
+  if (review && review.rulesFound === false) {
+    lines.push(`> ${review.rulesNotice || MISSING_RULES_NOTICE}`, "");
+  }
+  lines.push(...renderWhatChanged(review));
+
+  lines.push("### Risk", "", "| Risk | PR Summary |", "| --- | --- |");
   if (!review || review.unavailable) {
     const risk = "unavailable";
     const summary = review?.reason
@@ -147,6 +172,19 @@ export function renderReviewBreakdown(review, metadata = {}, options = {}) {
     lines.push(`| ${tableCell(risk, 16)} | ${formatPrSummary(review, metadata)} |`, "");
   }
 
+  lines.push("### Findings", "", "| Severity | Rule | Evidence | Impact & Action |", "| --- | --- | --- | --- |");
+  const findings = Array.isArray(review?.findings) ? review.findings.slice(0, 5) : [];
+  if (findings.length) {
+    for (const finding of findings) {
+      const evidence = Array.isArray(finding.evidence) ? finding.evidence.join(", ") : (finding.evidence || "Not supplied");
+      const action = [finding.impact, finding.recommendation ? `Action: ${finding.recommendation}` : ""].filter(Boolean).join(" ");
+      lines.push(`| ${tableCell(findingSeverityLabel(finding.severity, options), 28)} | ${tableCell(finding.ruleId || "—", 24)} | ${tableCell(evidence, 140)} | ${tableCell(action, 240)} |`);
+    }
+  } else {
+    lines.push("| — | — | — | No material findings. |");
+  }
+  lines.push("");
+
   lines.push("### Areas", "", "| Area | Status | Evidence |", "| --- | --- | --- |");
   const areas = Array.isArray(review?.areas) ? review.areas.slice(0, 6) : [];
   if (areas.length) {
@@ -154,22 +192,18 @@ export function renderReviewBreakdown(review, metadata = {}, options = {}) {
       lines.push(`| ${tableCell(area.area, 60)} | ${areaStatus(area.status, options)} | ${tableCell(area.evidence, 180)} |`);
     }
   } else {
-    lines.push("| Overall architecture | ➖ N/A | No areas were returned. |");
+    lines.push("| Overall review | ➖ N/A | No areas were returned. |");
   }
   lines.push("");
 
-  lines.push("### Architecture findings", "", "| Severity | Rule | Evidence | Impact & Action |", "| --- | --- | --- | --- |");
-  const findings = Array.isArray(review?.findings) ? review.findings.slice(0, 5) : [];
-  if (findings.length) {
-    for (const finding of findings) {
-      const evidence = Array.isArray(finding.evidence) ? finding.evidence.join(", ") : (finding.evidence || "Not supplied");
-      const action = [finding.impact, finding.recommendation ? `Action: ${finding.recommendation}` : ""].filter(Boolean).join(" ");
-      lines.push(`| ${tableCell(findingSeverityLabel(finding.severity, options), 28)} | ${tableCell(finding.ruleId, 24)} | ${tableCell(evidence, 140)} | ${tableCell(action, 240)} |`);
-    }
-  } else {
-    lines.push("| — | — | — | No material architecture findings. |");
+  const notes = Array.isArray(review?.architectureNotes)
+    ? review.architectureNotes.filter((note) => typeof note === "string" && note.trim()).slice(0, 5)
+    : [];
+  if (notes.length) {
+    lines.push("### Architecture notes", "");
+    for (const note of notes) lines.push(`- ${tableCell(note, 240)}`);
+    lines.push("");
   }
-  lines.push("");
   return lines.join("\n");
 }
 
@@ -198,10 +232,28 @@ export function renderDependenciesAndFollowUps(review, upgradeTable = "") {
   return lines.join("\n");
 }
 
+export function renderGateLead(review) {
+  const lines = [];
+  const logic = review && !review.unavailable && typeof review.summary === "string"
+    ? review.summary.trim()
+    : "";
+  if (logic) lines.push(tableCell(logic, 400), "");
+  const changes = review?.changes;
+  const hasChanges = changes && typeof changes === "object"
+    && (changes.added || changes.refactored || changes.removed);
+  if (hasChanges) {
+    const item = (label, value) => `- **${label}:** ${tableCell(value || "None", 240)}`;
+    lines.push("### What this PR changes", "");
+    lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed), "");
+  }
+  return lines;
+}
+
 export function renderGateComment(result, { metadata, upgradeTable } = {}) {
   const review = result.review;
   const meta = metadata || review?.metadata || {};
   const lines = [`## PR intelligence gate: ${result.passed ? "✅ passed" : "❌ failed"}`, ""];
+  lines.push(...renderGateLead(review));
   lines.push("| Check | Type | Outcome | Failure Trigger |", "| --- | --- | --- | --- |");
   for (const row of buildCheckRows(result)) {
     lines.push(`| ${trustedCell(row.check)} | ${trustedCell(row.type)} | ${tableCell(row.outcome, 220)} | ${trustedCell(row.trigger)} |`);

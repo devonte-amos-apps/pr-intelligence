@@ -354,6 +354,57 @@ describe("renderGateSummary layout", () => {
     expect(text).not.toContain("### Why it failed")
     expect(renderApprovalComment(evaluateGate(base))).toBe("✅ PR intelligence: approved — severity clear, release: patch")
   })
+
+  it("leads a passed gate comment with the PR logic summary and change list ahead of the checks table", () => {
+    const review = {
+      risk: "low",
+      summary: "Back-dated withdrawals are rejected when they would exceed the lowest running balance up to the next manual update.",
+      changes: {
+        added: "lowestBalanceFrom and invariant tests.",
+        refactored: "applyWithdraw now checks the historical low.",
+        removed: "None",
+      },
+      areas: [],
+      findings: [],
+      dependencies: [],
+      followUps: [],
+    }
+    const text = renderGateSummary(evaluateGate({ ...base, riskText: JSON.stringify(review) }))
+    expect(text).toMatch(/^## PR intelligence gate: ✅ passed/m)
+    const heading = text.indexOf("## PR intelligence gate: ✅ passed")
+    const logic = text.indexOf("Back-dated withdrawals are rejected")
+    const what = text.indexOf("### What this PR changes")
+    const table = text.indexOf("| Check | Type | Outcome | Failure Trigger |")
+    expect(logic).toBeGreaterThan(heading)
+    expect(what).toBeGreaterThan(logic)
+    expect(table).toBeGreaterThan(what)
+    expect(text).toContain("**Added:** lowestBalanceFrom and invariant tests.")
+    expect(text).toContain("**Refactored:** applyWithdraw now checks the historical low.")
+    expect(text).toContain("**Removed:** None")
+    expect(renderApprovalComment(evaluateGate({ ...base, riskText: JSON.stringify(review) }))).toBe(
+      "✅ PR intelligence: approved — severity clear, release: patch",
+    )
+  })
+
+  it("leads a failed gate comment with the same summary block ahead of the checks table", () => {
+    const review = {
+      ...highReview,
+      changes: {
+        added: "invariant tests",
+        refactored: "applyWithdraw",
+        removed: "None",
+      },
+    }
+    const text = renderGateSummary(evaluateGate({ ...base, riskText: JSON.stringify(review) }))
+    expect(text).toMatch(/^## PR intelligence gate: ❌ failed/m)
+    const heading = text.indexOf("## PR intelligence gate: ❌ failed")
+    const logic = text.indexOf("Updates applyWithdraw()")
+    const what = text.indexOf("### What this PR changes")
+    const table = text.indexOf("| Check | Type | Outcome | Failure Trigger |")
+    expect(logic).toBeGreaterThan(heading)
+    expect(what).toBeGreaterThan(logic)
+    expect(table).toBeGreaterThan(what)
+  })
 })
 
 describe("suggestRelease and severity status", () => {

@@ -89,11 +89,43 @@ describe("main", () => {
     expect(await read()).toContain("invalid JSON")
   })
 
-  it("reports missing rules file", async () => {
+  it("runs a PR-focused review when the rules file path is missing", async () => {
     await setup()
+    process.env.GEMINI_API_KEY = "k"
+    process.env.RULES_PATH = "missing.json"
+    const generateContent = vi.fn(async () => ({ text: JSON.stringify(review) }))
+    await main({ cwd: dir, createClient: async () => ({ models: { generateContent } }), fetchImpl: null as never })
+    const out = await read()
+    expect(out).toContain("No architecture rules file found — PR-focused review only")
+    expect(process.exitCode).toBe(0)
+    const call = generateContent.mock.calls[0][0] as { contents: string; config: { systemInstruction: string } }
+    expect(call.contents).toContain("residual risk")
+    expect(call.contents).toContain("No architecture rules file was provided")
+    expect(call.contents).toContain("PR-focused review only")
+    expect(JSON.parse(await fs.readFile(path.join(dir, ".pr-architecture", "review-result.json"), "utf8"))).toMatchObject({
+      rulesFound: false,
+    })
+  })
+
+  it("uses the default rules path and still reviews when that file is absent", async () => {
+    await setup()
+    process.env.GEMINI_API_KEY = "k"
+    delete process.env.RULES_PATH
+    const generateContent = vi.fn(async () => ({ text: JSON.stringify(review) }))
+    await main({ cwd: dir, createClient: async () => ({ models: { generateContent } }), fetchImpl: null as never })
+    expect(await read()).toContain("No architecture rules file found — PR-focused review only")
+    expect(generateContent).toHaveBeenCalledTimes(1)
+    expect(process.exitCode).toBe(0)
+  })
+
+  it("falls back to a missing-key error, not a missing-rules error, when both are absent", async () => {
+    await setup()
+    delete process.env.GEMINI_API_KEY
     process.env.RULES_PATH = "missing.json"
     await main({ cwd: dir, fetchImpl: null as never })
-    expect(await read()).toContain("Review inputs could not be loaded")
+    expect(await read()).toContain("GEMINI_API_KEY")
+    expect(await read()).not.toContain("Review inputs could not be loaded")
+    expect(process.exitCode).toBe(1)
   })
 
   it("retries server errors and reports empty or failed responses", async () => {
