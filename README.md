@@ -41,7 +41,9 @@ The workflow runs a second job, **PR intelligence gate**, that passes or fails t
 | PR introduces a major version bump (`fail-on-majors`) | warning (fail when `true`) |
 | Major upgrades available (npm outdated) | warning |
 
-The gate writes a job summary and a sticky PR comment explaining each failure and how to fix it. `tool-ref` (default `v1`) selects which pr-intelligence ref runs the scripts; keep it in step with the ref in `uses:`.
+The gate writes a job summary and a sticky PR comment with a check table (`Check | Type | Outcome | Failure Trigger`), a data-derived **Why it failed** section, a **PR review breakdown** (risk, PR title/body and model summary, areas, and findings), and a collapsible threshold matrix generated from the same policy object `evaluateGate` implements. Architecture findings and area results are shown as advisory; they do not independently fail the gate. After the gate runs, that comment is updated in place and consolidated with the architecture-review comment (markers `<!-- pr-intelligence-gate -->` and `<!-- pr-architecture-intelligence -->`) so reruns do not spam the thread.
+
+`tool-ref` (default `v1`) selects which pr-intelligence ref runs the scripts; keep it in step with the ref in `uses:`.
 
 ## Develop and test
 

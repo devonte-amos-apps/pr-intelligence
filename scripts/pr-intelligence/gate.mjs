@@ -4,7 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { renderGateComment } from "./comment-layout.mjs";
 import { directDependencies, parseOutdated, buildUpgradeSuggestions } from "./dependency-upgrades.mjs";
+import { riskFailureCopy } from "./gate-policy.mjs";
+
+export { GATE_POLICY } from "./gate-policy.mjs";
 
 export function auditCounts(text) {
   const empty = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
@@ -47,6 +51,29 @@ export function parseCruiserModules(text) {
   return match ? { modules: Number(match[1]), dependencies: Number(match[2]) } : null;
 }
 
+export function parseCruiserReport(text) {
+  const clean = (text || "").replace(/\u001b\[[0-9;]*m/g, "");
+  const counts = parseCruiserModules(clean);
+  const match = /(\d+)\s+dependency violations?\s+\((\d+)\s+errors?,\s*(\d+)\s+warnings?\)/i.exec(clean);
+  return {
+    modules: counts?.modules ?? null,
+    dependencies: counts?.dependencies ?? null,
+    violations: match ? Number(match[1]) : 0,
+    errors: match ? Number(match[2]) : 0,
+    warnings: match ? Number(match[3]) : 0,
+    skipped: /\bskipped\b/i.test(clean),
+  };
+}
+
+export function parseReview(text) {
+  try {
+    const data = JSON.parse(text || "");
+    return data && typeof data === "object" ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 const majorOf = (range) => {
   const m = /^[\s^~>=v]*(\d+)/.exec(String(range || ""));
   return m ? Number(m[1]) : null;
@@ -61,12 +88,14 @@ export function introducedMajors(basePackage, headPackage) {
     .map(([name, d]) => ({ name, from: base.get(name).range, to: d.range }));
 }
 
-export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = false }) {
+export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cruiserRequested, basePackage, headPackage, outdatedText, failOnHigh = true, failOnMajors = false, review: reviewInput } = {}) {
   const failures = [];
   const warnings = [];
   const audit = auditCounts(auditText);
   const risk = parseRisk(riskText);
   const cruiser = parseCruiserModules(cruiserText);
+  const cruiserDetails = parseCruiserReport(cruiserText);
+  const review = reviewInput || parseReview(riskText);
 
   if (!audit.parsed) warnings.push("npm audit output could not be read, so vulnerabilities were not checked.");
   else if (audit.high + audit.critical > 0) {
@@ -80,11 +109,8 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
 
   if (risk === null) warnings.push("AI risk rating unavailable (Gemini down, rate-limited or not configured); the risk check was skipped.");
   else if (failOnHigh && (risk === "high" || risk === "critical")) {
-    failures.push({
-      check: "Review risk",
-      reason: `The architecture review rated this PR ${risk.toUpperCase()} risk.`,
-      fix: "Address the findings in the PR Architecture Intelligence comment, push, and let the review rerun.",
-    });
+    const { reason, fix } = riskFailureCopy(risk, review);
+    failures.push({ check: "Review risk", reason, fix });
   }
 
   if (cruiserRequested) {
@@ -114,33 +140,11 @@ export function evaluateGate({ auditText, riskText, cruiserText, cruiserExit, cr
     available = [];
   }
 
-  return { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, introduced, availableMajors: available };
+  return { passed: failures.length === 0, failures, warnings, audit, risk, cruiser, cruiserDetails, cruiserRequested: Boolean(cruiserRequested), introduced, availableMajors: available, review, failOnHigh, failOnMajors };
 }
 
-export function renderGateSummary(result) {
-  const lines = [`## PR intelligence gate: ${result.passed ? "✅ passed" : "❌ failed"}`, ""];
-  const a = result.audit;
-  lines.push("| Check | Result |", "| --- | --- |");
-  lines.push(`| npm audit | ${a.parsed ? `${a.critical} critical, ${a.high} high, ${a.moderate} moderate, ${a.low} low` : "not readable"} |`);
-  lines.push(`| Review risk | ${result.risk ? result.risk.toUpperCase() : "unavailable (skipped)"} |`);
-  lines.push(`| dependency-cruiser | ${result.cruiser ? `${result.cruiser.modules} modules, ${result.cruiser.dependencies} dependencies checked` : "not run or count unavailable"} |`);
-  lines.push(`| Majors introduced by this PR | ${result.introduced.length} |`, "");
-  if (result.failures.length) {
-    lines.push("### Why it failed", "");
-    for (const f of result.failures) lines.push(`- **${f.check}:** ${f.reason}`, `  - How to fix: ${f.fix}`);
-    lines.push("");
-  }
-  if (result.warnings.length) {
-    lines.push("### Warnings", "");
-    for (const w of result.warnings) lines.push(`- ${w}`);
-    lines.push("");
-  }
-  if (result.availableMajors.length) {
-    lines.push("### Major upgrades available (warning only)", "");
-    for (const m of result.availableMajors) lines.push(`- \`${m.name}\` ${m.current} → ${m.latest}`);
-    lines.push("", "Upgrade majors in dedicated PRs.", "");
-  }
-  return lines.join("\n");
+export function renderGateSummary(result, options) {
+  return renderGateComment(result, options);
 }
 
 async function readOptional(file) {
