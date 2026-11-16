@@ -232,10 +232,28 @@ export function renderDependenciesAndFollowUps(review, upgradeTable = "") {
   return lines.join("\n");
 }
 
+export function renderGateLead(review) {
+  const lines = [];
+  const logic = review && !review.unavailable && typeof review.summary === "string"
+    ? review.summary.trim()
+    : "";
+  if (logic) lines.push(tableCell(logic, 400), "");
+  const changes = review?.changes;
+  const hasChanges = changes && typeof changes === "object"
+    && (changes.added || changes.refactored || changes.removed);
+  if (hasChanges) {
+    const item = (label, value) => `- **${label}:** ${tableCell(value || "None", 240)}`;
+    lines.push("### What this PR changes", "");
+    lines.push(item("Added", changes.added), item("Refactored", changes.refactored), item("Removed", changes.removed), "");
+  }
+  return lines;
+}
+
 export function renderGateComment(result, { metadata, upgradeTable } = {}) {
   const review = result.review;
   const meta = metadata || review?.metadata || {};
   const lines = [`## PR intelligence gate: ${result.passed ? "✅ passed" : "❌ failed"}`, ""];
+  lines.push(...renderGateLead(review));
   lines.push("| Check | Type | Outcome | Failure Trigger |", "| --- | --- | --- | --- |");
   for (const row of buildCheckRows(result)) {
     lines.push(`| ${trustedCell(row.check)} | ${trustedCell(row.type)} | ${tableCell(row.outcome, 220)} | ${trustedCell(row.trigger)} |`);
