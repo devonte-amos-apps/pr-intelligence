@@ -4,6 +4,14 @@ Shared, reusable PR Architecture Intelligence review for personal and project re
 
 Each run collects the diff, `npm audit`, `npm ls`, tests, build and optional dependency-cruiser output, asks Gemini for a structured review against the **caller's own rules file**, and posts a sticky PR comment. It also adds a **Dependency upgrade suggestions** table for every direct (level-0) dependency: installed vs latest stable, patch/minor/major, with key-framework majors (React, Next.js, TypeScript, Prisma, Vitest, …) flagged and linked to release notes. The table is rendered even when Gemini is unavailable.
 
+## How it works
+
+Verification uses existing deterministic checks (`npm audit`, dependency-cruiser, and major-version detection) plus the thresholds in `GATE_POLICY` to decide whether the PR passes or fails.
+
+AI intelligence (Gemini, against each app's own ARCH rules) summarises the PR, explains the work, rates risk, and lists findings and areas. The AI risk rating and any high or critical findings also feed the gate — they can fail the PR when those checks are enabled, which is the default. A release suggestion (patch, minor, or major) comes from the conventional title, labels, or branch name, not from the model.
+
+Results are posted as sticky PR comments. The action never merges the PR.
+
 ## Usage
 
 ```yaml
