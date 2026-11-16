@@ -25,11 +25,23 @@ export function formatPrSummary(review, metadata = {}) {
   return summary;
 }
 
+function policyFlags(result = {}) {
+  return {
+    failOnHigh: result.failOnHigh !== false,
+    failOnMajors: result.failOnMajors !== false,
+    failOnHighFindings: result.failOnHighFindings !== false,
+    failOnAreaFail: result.failOnAreaFail !== false,
+    allowMajorUpgrade: result.allowMajorUpgrade === true,
+  };
+}
+
 export function buildCheckRows(result) {
   const policy = GATE_POLICY.checks;
-  const failOnHigh = result.failOnHigh !== false;
-  const failOnMajors = result.failOnMajors === true;
+  const flags = policyFlags(result);
+  const failOnHigh = flags.failOnHigh;
+  const failOnMajors = flags.failOnMajors;
   const failed = new Set((result.failures || []).map((f) => f.check));
+  const triggerOf = (check) => (typeof check.trigger === "function" ? check.trigger(flags) : check.trigger);
 
   const audit = result.audit || {};
   const auditOutcome = !audit.parsed
@@ -42,20 +54,22 @@ export function buildCheckRows(result) {
   let cruiserOutcome = "not run or count unavailable";
   if (!cruiserRequested) cruiserOutcome = "not requested";
   else if (cruiserDetails?.skipped) cruiserOutcome = "skipped (not installed)";
-  else if (failed.has("dependency-cruiser")) cruiserOutcome = "Fail (0 modules checked)";
+  else if (failed.has("dependency-cruiser") && cruiser?.modules === 0) cruiserOutcome = "Fail (0 modules checked)";
+  else if (failed.has("dependency-cruiser") && cruiserDetails?.errors > 0) {
+    cruiserOutcome = `Fail (${cruiser.modules} modules, ${cruiser.dependencies} dependencies checked; ${cruiserDetails.errors} cruiser error(s))`;
+  } else if (failed.has("dependency-cruiser")) cruiserOutcome = "Fail";
   else if (cruiser) {
-    const extra = cruiserDetails?.errors > 0
-      ? `; ${cruiserDetails.errors} cruiser error(s) recorded, advisory`
-      : "";
-    cruiserOutcome = `Pass (${cruiser.modules} modules, ${cruiser.dependencies} dependencies checked${extra})`;
+    cruiserOutcome = `Pass (${cruiser.modules} modules, ${cruiser.dependencies} dependencies checked)`;
   }
 
   const introduced = result.introduced || [];
   let majorsOutcome = `Pass (${introduced.length})`;
-  if (failed.has("Major upgrades")) {
+  if (failed.has("Majors introduced") || failed.has("Major upgrades")) {
     const list = introduced.map((m) => `${m.name} ${m.from} → ${m.to}`).join(", ");
     majorsOutcome = `Fail (${introduced.length}${list ? `: ${list}` : ""})`;
-  } else if (introduced.length) {
+  } else if (introduced.length && flags.allowMajorUpgrade) {
+    majorsOutcome = `Pass (${introduced.length}; allowed by allow-major-upgrade)`;
+  } else if (introduced.length && !failOnMajors) {
     majorsOutcome = `Pass (${introduced.length}; warning — fail-on-majors is off)`;
   }
 
@@ -70,24 +84,34 @@ export function buildCheckRows(result) {
 
   const review = result.review;
   const listed = findingList(review);
-  const findingsOutcome = !review || review.unavailable
-    ? "unavailable"
-    : listed.length
+  let findingsOutcome = "unavailable";
+  if (review && !review.unavailable) {
+    const detail = listed.length
       ? `${listed.length} finding${listed.length === 1 ? "" : "s"} (${listed.join(", ")})`
       : "0 findings";
+    findingsOutcome = `${failed.has("Architecture findings") ? "Fail" : "Pass"} (${detail})`;
+  }
+
+  const failingAreas = Array.isArray(review?.areas) ? review.areas.filter((area) => area.status === "fail") : [];
+  let areasOutcome = "unavailable";
+  if (review && !review.unavailable) {
+    areasOutcome = failed.has("Areas")
+      ? `Fail (${failingAreas.map((area) => area.area).join(", ") || "area Fail"})`
+      : "Pass (no failed areas)";
+  }
 
   return [
-    { check: policy.audit.name, type: policy.audit.type, outcome: auditOutcome, trigger: policy.audit.trigger },
-    { check: policy.cruiser.name, type: policy.cruiser.type, outcome: cruiserOutcome, trigger: policy.cruiser.trigger },
-    { check: policy.majors.name, type: policy.majors.type, outcome: majorsOutcome, trigger: policy.majors.trigger({ failOnMajors }) },
-    { check: policy.risk.name, type: policy.risk.type, outcome: riskOutcome, trigger: policy.risk.trigger({ failOnHigh }) },
-    { check: policy.findings.name, type: policy.findings.type, outcome: findingsOutcome, trigger: policy.findings.trigger },
+    { check: policy.audit.name, type: policy.audit.type, outcome: auditOutcome, trigger: triggerOf(policy.audit) },
+    { check: policy.cruiser.name, type: policy.cruiser.type, outcome: cruiserOutcome, trigger: triggerOf(policy.cruiser) },
+    { check: policy.majors.name, type: policy.majors.type, outcome: majorsOutcome, trigger: triggerOf(policy.majors) },
+    { check: policy.risk.name, type: policy.risk.type, outcome: riskOutcome, trigger: triggerOf(policy.risk) },
+    { check: policy.findings.name, type: policy.findings.type, outcome: findingsOutcome, trigger: triggerOf(policy.findings) },
+    { check: policy.areas.name, type: policy.areas.type, outcome: areasOutcome, trigger: triggerOf(policy.areas) },
   ];
 }
 
 export function renderThresholdMatrix(result = {}) {
-  const failOnHigh = result.failOnHigh !== false;
-  const failOnMajors = result.failOnMajors === true;
+  const flags = policyFlags(result);
   const lines = [
     "<details>",
     "<summary>What outcomes can fail the intelligence review?</summary>",
@@ -100,7 +124,7 @@ export function renderThresholdMatrix(result = {}) {
     for (const check of Object.values(GATE_POLICY.checks)) {
       if (check.category !== category) continue;
       const trigger = typeof check.trigger === "function"
-        ? check.matrixTrigger || check.trigger({ failOnHigh, failOnMajors })
+        ? check.matrixTrigger || check.trigger(flags)
         : check.trigger;
       lines.push(`- **${check.name}** (${check.type}): ${trigger}`);
     }
@@ -110,7 +134,7 @@ export function renderThresholdMatrix(result = {}) {
   return lines.join("\n");
 }
 
-export function renderReviewBreakdown(review, metadata = {}) {
+export function renderReviewBreakdown(review, metadata = {}, options = {}) {
   const lines = ["## PR review breakdown", "", "### Summary & Risk", "", "| Risk | PR Summary |", "| --- | --- |"];
   if (!review || review.unavailable) {
     const risk = "unavailable";
@@ -127,7 +151,7 @@ export function renderReviewBreakdown(review, metadata = {}) {
   const areas = Array.isArray(review?.areas) ? review.areas.slice(0, 6) : [];
   if (areas.length) {
     for (const area of areas) {
-      lines.push(`| ${tableCell(area.area, 60)} | ${areaStatus(area.status)} | ${tableCell(area.evidence, 180)} |`);
+      lines.push(`| ${tableCell(area.area, 60)} | ${areaStatus(area.status, options)} | ${tableCell(area.evidence, 180)} |`);
     }
   } else {
     lines.push("| Overall architecture | ➖ N/A | No areas were returned. |");
@@ -140,7 +164,7 @@ export function renderReviewBreakdown(review, metadata = {}) {
     for (const finding of findings) {
       const evidence = Array.isArray(finding.evidence) ? finding.evidence.join(", ") : (finding.evidence || "Not supplied");
       const action = [finding.impact, finding.recommendation ? `Action: ${finding.recommendation}` : ""].filter(Boolean).join(" ");
-      lines.push(`| ${tableCell(findingSeverityLabel(finding.severity), 28)} | ${tableCell(finding.ruleId, 24)} | ${tableCell(evidence, 140)} | ${tableCell(action, 240)} |`);
+      lines.push(`| ${tableCell(findingSeverityLabel(finding.severity, options), 28)} | ${tableCell(finding.ruleId, 24)} | ${tableCell(evidence, 140)} | ${tableCell(action, 240)} |`);
     }
   } else {
     lines.push("| — | — | — | No material architecture findings. |");
@@ -197,8 +221,19 @@ export function renderGateComment(result, { metadata, upgradeTable } = {}) {
     lines.push("");
   }
 
-  lines.push(renderReviewBreakdown(review, meta));
+  lines.push(renderReviewBreakdown(review, meta, policyFlags(result)));
   lines.push(renderDependenciesAndFollowUps(review, upgradeTable));
+
+  const release = result.releaseSuggestion;
+  if (release?.level) {
+    lines.push("### Release suggestion", "", `**${release.level}** — ${release.reason}`, "");
+  }
+  if (result.severityStatus?.summary) {
+    const label = result.severityStatus.clear ? "Clear" : result.severityStatus.summary;
+    lines.push("### Severity status", "", result.severityStatus.clear
+      ? "**Clear** — no high or critical blocking items remain."
+      : `**${label}**`, "");
+  }
 
   if (result.availableMajors?.length) {
     lines.push("### Major upgrades available (warning only)", "");
